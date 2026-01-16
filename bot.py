@@ -35,14 +35,23 @@ def load_config():
                     numeric_fields = ['AUTHORIZED_USER_ID', 'SUGGESTION_CHANNEL_ID', 'RAPE_CHANNEL_ID',
                                      'SPECIAL_MESSAGE_CHANNEL_ID', 'CHICKEN_OUT_CHANNEL_ID',
                                      'SUGGESTION_PING_ROLE_ID', 'RANDOM_MESSAGE_CHANCE',
-                                     'MESSAGE_RELOAD_INTERVAL', 'CHICKEN_OUT_TIMEOUT']
+                                     'MESSAGE_RELOAD_INTERVAL', 'CHICKEN_OUT_TIMEOUT',
+                                     'SPECIAL_CHANNEL_YES_EMOJI', 'SPECIAL_CHANNEL_NO_EMOJI']
+                    
+                    # Convert boolean fields
+                    boolean_fields = ['ENABLE_RANDOM_MESSAGES', 'ENABLE_MENTION_RESPONSES',
+                                     'ENABLE_SPECIAL_CHANNEL', 'ENABLE_CHICKEN_OUT',
+                                     'ENABLE_SUGGESTIONS', 'ENABLE_RAPE_COMMAND']
+                    
                     if key in numeric_fields:
                         try:
-                            config[key] = int(value)
+                            config[key] = int(value) if value else 0
                         except ValueError:
                             print(f"❌ Error: {key} must be a number, but got '{value}'")
                             print(f"Please fix this in {config_file}")
                             exit(1)
+                    elif key in boolean_fields:
+                        config[key] = value.lower() in ['true', '1', 'yes', 'on']
                     else:
                         config[key] = value
     except IOError as e:
@@ -50,7 +59,7 @@ def load_config():
         exit(1)
     
     # Validate required fields
-    required_fields = ['TOKEN', 'COMMAND_PREFIX', 'DEFAULT_MSGS_FILE', 'MENTION_MSGS_FILE',
+    required_fields = ['TOKEN', 'DEFAULT_MSGS_FILE', 'MENTION_MSGS_FILE',
                       'SUGGESTION_CHANNEL_ID', 'RAPE_CHANNEL_ID', 'SPECIAL_MESSAGE_CHANNEL_ID',
                       'CHICKEN_OUT_CHANNEL_ID', 'SUGGESTION_PING_ROLE_ID', 'RANDOM_MESSAGE_CHANCE',
                       'MESSAGE_RELOAD_INTERVAL', 'CHICKEN_OUT_TIMEOUT', 'CHICKENED_OUT_MSG',
@@ -88,6 +97,34 @@ def load_config():
     if config['AUTHORIZED_USER_ID'] == 0:
         print(f"⚠️ Warning: AUTHORIZED_USER_ID is not set (0). No one will be able to approve suggestions!")
     
+    # Set default values for optional fields
+    optional_defaults = {
+        'ENABLE_RANDOM_MESSAGES': True,
+        'ENABLE_MENTION_RESPONSES': True,
+        'ENABLE_SPECIAL_CHANNEL': True,
+        'ENABLE_CHICKEN_OUT': True,
+        'ENABLE_SUGGESTIONS': True,
+        'ENABLE_RAPE_COMMAND': True,
+        'REJECT_BUTTON_EMOJI': '🗑️',
+        'REJECT_BUTTON_LABEL': '❌ Reject',
+        'DEFAULT_BUTTON_EMOJI': '📌',
+        'DEFAULT_BUTTON_LABEL': '✅ Default',
+        'MENTION_BUTTON_EMOJI': '👋',
+        'MENTION_BUTTON_LABEL': '✅ Mention',
+        'BOTH_BUTTON_EMOJI': '✨',
+        'BOTH_BUTTON_LABEL': '✅ Both',
+        'SPECIAL_CHANNEL_YES_EMOJI': '1416494635660087467',
+        'SPECIAL_CHANNEL_NO_EMOJI': '1416494651195654277',
+        'SUGGESTION_EMBED_COLOR': '0x0099ff',
+        'SUCCESS_COLOR': '00aa00',
+        'ERROR_COLOR': 'ff0000',
+        'WARNING_COLOR': 'ffaa00',
+    }
+    
+    for key, default_value in optional_defaults.items():
+        if key not in config:
+            config[key] = default_value
+    
     return config
 
 def create_config_template(filename):
@@ -113,13 +150,13 @@ MENTION_MSGS_FILE=mention_msgs.txt
 # Channel for message suggestions
 SUGGESTION_CHANNEL_ID=1365676297589624903
 
-# Channel for the \"rape\" command
+# Channel for the "rape" command
 RAPE_CHANNEL_ID=1420163750551617677
 
 # Channel for special message handling (auto-thread creation)
 SPECIAL_MESSAGE_CHANNEL_ID=1416584800457723965
 
-# Channel for \"chicken out\" notifications
+# Channel for "chicken out" notifications
 CHICKEN_OUT_CHANNEL_ID=1365834457864732732
 
 # ===== ROLE IDS =====
@@ -133,7 +170,7 @@ RANDOM_MESSAGE_CHANCE=100
 # Time between auto-reloading messages from files (in seconds)
 MESSAGE_RELOAD_INTERVAL=300
 
-# Time window for \"chicken out\" detection after joining (in seconds)
+# Time window for "chicken out" detection after joining (in seconds)
 CHICKEN_OUT_TIMEOUT=900
 
 # Message to send when someone chickens out
@@ -142,6 +179,70 @@ CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063
 # ===== PERMISSIONS =====
 # Authorized user ID for approving/declining suggestions (numeric ID)
 AUTHORIZED_USER_ID=1209428799289032704
+
+# ===== FEATURE TOGGLES =====
+# Enable/disable random message responses
+ENABLE_RANDOM_MESSAGES=true
+
+# Enable/disable mention responses
+ENABLE_MENTION_RESPONSES=true
+
+# Enable/disable special channel auto-threading
+ENABLE_SPECIAL_CHANNEL=true
+
+# Enable/disable chicken out detection
+ENABLE_CHICKEN_OUT=true
+
+# Enable/disable message suggestion system
+ENABLE_SUGGESTIONS=true
+
+# Enable/disable rape command
+ENABLE_RAPE_COMMAND=true
+
+# ===== SUGGESTION BUTTON EMOJIS =====
+# Emoji for reject button
+REJECT_BUTTON_EMOJI=🗑️
+REJECT_BUTTON_LABEL=❌ Reject
+
+# Emoji for default list button
+DEFAULT_BUTTON_EMOJI=📌
+DEFAULT_BUTTON_LABEL=✅ Default
+
+# Emoji for mention list button
+MENTION_BUTTON_EMOJI=👋
+MENTION_BUTTON_LABEL=✅ Mention
+
+# Emoji for both lists button
+BOTH_BUTTON_EMOJI=✨
+BOTH_BUTTON_LABEL=✅ Both
+
+# ===== SPECIAL CHANNEL REACTION EMOJIS =====
+# Custom emoji IDs for special channel reactions (leave empty for standard reactions)
+SPECIAL_CHANNEL_YES_EMOJI=1416494635660087467
+SPECIAL_CHANNEL_NO_EMOJI=1416494651195654277
+
+# ===== LOGGING MESSAGES =====
+# Messages for various events (use {user}, {member}, {channel}, {role} as placeholders)
+RANDOM_MESSAGE_LOG=Random message sent
+MENTION_RESPONSE_LOG=Responded to mention
+SUGGESTION_RECEIVED_LOG=Suggestion received
+RAPE_LOG={user} raped {member}
+CHICKEN_OUT_LOG={user} chickened out
+MEMBER_JOIN_LOG={user} joined the server
+MEMBER_LEAVE_LOG={user} left the server
+
+# ===== COLORS (HEX format without #) =====
+# Color for suggestion embed
+SUGGESTION_EMBED_COLOR=0x0099ff
+
+# Color for success messages
+SUCCESS_COLOR=00aa00
+
+# Color for error messages
+ERROR_COLOR=ff0000
+
+# Color for warning messages
+WARNING_COLOR=ffaa00
 """
     with open(filename, 'w', encoding='utf-8') as f:
         f.write(template)
@@ -151,7 +252,6 @@ config = load_config()
 
 # Core settings
 TOKEN = config['TOKEN']
-COMMAND_PREFIX = config['COMMAND_PREFIX']
 
 # Message files
 DEFAULT_MSGS_FILE = config['DEFAULT_MSGS_FILE']
@@ -175,13 +275,47 @@ CHICKENED_OUT_MSG = config['CHICKENED_OUT_MSG']
 # Permissions
 AUTHORIZED_USER_ID = config['AUTHORIZED_USER_ID']
 
+# Feature toggles
+ENABLE_RANDOM_MESSAGES = config['ENABLE_RANDOM_MESSAGES']
+ENABLE_MENTION_RESPONSES = config['ENABLE_MENTION_RESPONSES']
+ENABLE_SPECIAL_CHANNEL = config['ENABLE_SPECIAL_CHANNEL']
+ENABLE_CHICKEN_OUT = config['ENABLE_CHICKEN_OUT']
+ENABLE_SUGGESTIONS = config['ENABLE_SUGGESTIONS']
+ENABLE_RAPE_COMMAND = config['ENABLE_RAPE_COMMAND']
+
+# Button emojis and labels
+REJECT_BUTTON_EMOJI = config['REJECT_BUTTON_EMOJI']
+REJECT_BUTTON_LABEL = config['REJECT_BUTTON_LABEL']
+DEFAULT_BUTTON_EMOJI = config['DEFAULT_BUTTON_EMOJI']
+DEFAULT_BUTTON_LABEL = config['DEFAULT_BUTTON_LABEL']
+MENTION_BUTTON_EMOJI = config['MENTION_BUTTON_EMOJI']
+MENTION_BUTTON_LABEL = config['MENTION_BUTTON_LABEL']
+BOTH_BUTTON_EMOJI = config['BOTH_BUTTON_EMOJI']
+BOTH_BUTTON_LABEL = config['BOTH_BUTTON_LABEL']
+
+# Special channel emojis
+SPECIAL_CHANNEL_YES_EMOJI = config['SPECIAL_CHANNEL_YES_EMOJI']
+SPECIAL_CHANNEL_NO_EMOJI = config['SPECIAL_CHANNEL_NO_EMOJI']
+
+# Colors
+SUGGESTION_EMBED_COLOR = config['SUGGESTION_EMBED_COLOR']
+SUCCESS_COLOR = config['SUCCESS_COLOR']
+ERROR_COLOR = config['ERROR_COLOR']
+WARNING_COLOR = config['WARNING_COLOR']
+
 print(f"✅ Configuration loaded successfully!")
 print(f"📁 Default messages file: {DEFAULT_MSGS_FILE}")
 print(f"📁 Mention messages file: {MENTION_MSGS_FILE}")
-print(f"🎮 Command prefix: {COMMAND_PREFIX}")
 print(f"📊 Random message chance: 1 in {RANDOM_MESSAGE_CHANCE}")
 print(f"⏱️  Reload interval: {MESSAGE_RELOAD_INTERVAL}s")
 print(f"👤 Authorized user ID: {AUTHORIZED_USER_ID}")
+print(f"🔧 Feature flags:")
+print(f"   ├─ Random messages: {'✅' if ENABLE_RANDOM_MESSAGES else '❌'}")
+print(f"   ├─ Mention responses: {'✅' if ENABLE_MENTION_RESPONSES else '❌'}")
+print(f"   ├─ Special channel: {'✅' if ENABLE_SPECIAL_CHANNEL else '❌'}")
+print(f"   ├─ Chicken out: {'✅' if ENABLE_CHICKEN_OUT else '❌'}")
+print(f"   ├─ Suggestions: {'✅' if ENABLE_SUGGESTIONS else '❌'}")
+print(f"   └─ Rape command: {'✅' if ENABLE_RAPE_COMMAND else '❌'}")
 
 # Function to load messages from file with automatic creation if missing
 def load_msgs_from_file(filename):
@@ -221,7 +355,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
+bot = commands.Bot(intents=intents)
 
 class MsgSuggestionView(View):
     def __init__(self, author_id, msg_content, message_id):
@@ -365,6 +499,13 @@ class MsgSuggestionView(View):
 async def suggest_message_context(interaction: discord.Interaction, message: discord.Message):
     """Context menu command to suggest a message for the bot"""
     
+    if not ENABLE_SUGGESTIONS:
+        await interaction.response.send_message(
+            "❌ Message suggestions are currently disabled.",
+            ephemeral=True
+        )
+        return
+    
     # Check if message has content
     if not message.content:
         await interaction.response.send_message(
@@ -388,7 +529,7 @@ async def suggest_message_context(interaction: discord.Interaction, message: dis
         embed = discord.Embed(
             title="New Proposed Message Suggestion",
             description=f"User {interaction.user.mention} suggests this message for the bot:",
-            color=discord.Color.blue(),
+            color=discord.Color(int(SUGGESTION_EMBED_COLOR, 16)),
             timestamp=discord.utils.utcnow()
         )
         embed.add_field(name="📝 Message Content", value=msg_content, inline=False)
@@ -426,6 +567,11 @@ async def suggest_message_context(interaction: discord.Interaction, message: dis
 @bot.tree.context_menu(name="Rape member")
 async def rape_user(interaction: discord.Interaction, member: discord.Member):
     """Context menu command to rape a user"""
+    
+    if not ENABLE_RAPE_COMMAND:
+        await interaction.response.send_message("❌ Rape command is currently disabled.", ephemeral=True)
+        return
+    
     # Get the target channel
     target_channel = bot.get_channel(RAPE_CHANNEL_ID)
     
@@ -497,6 +643,13 @@ async def on_ready():
 async def suggest_msg_slash(interaction: discord.Interaction, message: str):
     """Slash command to suggest a message for the bot to use"""
     
+    if not ENABLE_SUGGESTIONS:
+        await interaction.response.send_message(
+            "❌ Message suggestions are currently disabled.",
+            ephemeral=True
+        )
+        return
+    
     msg_content = message
     
     target_channel = bot.get_channel(SUGGESTION_CHANNEL_ID)
@@ -512,7 +665,7 @@ async def suggest_msg_slash(interaction: discord.Interaction, message: str):
         embed = discord.Embed(
             title="New Proposed Message Suggestion",
             description=f"User {interaction.user.mention} suggests this message for the bot:",
-            color=discord.Color.blue(),
+            color=discord.Color(int(SUGGESTION_EMBED_COLOR, 16)),
             timestamp=discord.utils.utcnow()
         )
         embed.add_field(name="📝 Message Content", value=msg_content, inline=False)
@@ -549,7 +702,7 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # Auto-reload message lists every 5 minutes to catch external changes
+    # Auto-reload message lists every configured interval
     if not hasattr(bot, 'last_msg_reload'):
         bot.last_msg_reload = discord.utils.utcnow()
     
@@ -562,10 +715,14 @@ async def on_message(message):
         print(f"🔄 Periodic reload: Default={len(default_msgs)}, Mention={len(mention_msgs)}")
 
     # Special channel handling
-    if message.channel.id == SPECIAL_MESSAGE_CHANNEL_ID:
+    if ENABLE_SPECIAL_CHANNEL and message.channel.id == SPECIAL_MESSAGE_CHANNEL_ID:
         try:
-            await message.add_reaction('<:yes:1416494635660087467>')
-            await message.add_reaction('<:no:1416494651195654277>')
+            # Use custom emojis if provided, otherwise use standard ones
+            yes_emoji = f"<:yes:{SPECIAL_CHANNEL_YES_EMOJI}>" if SPECIAL_CHANNEL_YES_EMOJI else '✅'
+            no_emoji = f"<:no:{SPECIAL_CHANNEL_NO_EMOJI}>" if SPECIAL_CHANNEL_NO_EMOJI else '❌'
+            
+            await message.add_reaction(yes_emoji)
+            await message.add_reaction(no_emoji)
             
             thread_name = message.content[:100] if message.content.strip() else "Discussion"
             thread = await message.create_thread(name=thread_name)
@@ -579,7 +736,7 @@ async def on_message(message):
             print(f"❌ Error processing message in channel {SPECIAL_MESSAGE_CHANNEL_ID}: {e}")
 
     # Send random message based on configured chance
-    if random.randint(1, RANDOM_MESSAGE_CHANCE) == 1 and default_msgs:
+    if ENABLE_RANDOM_MESSAGES and random.randint(1, RANDOM_MESSAGE_CHANCE) == 1 and default_msgs:
         msg = random.choice(default_msgs)
         try:
             await message.channel.send(msg)
@@ -589,7 +746,7 @@ async def on_message(message):
             print(f"❌ Error sending random message: {e}")
 
     # If bot is mentioned, send message from mention list
-    if bot.user.mentioned_in(message) and mention_msgs:
+    if ENABLE_MENTION_RESPONSES and bot.user.mentioned_in(message) and mention_msgs:
         msg = random.choice(mention_msgs)
         try:
             await message.channel.send(msg)
@@ -603,10 +760,11 @@ async def on_message(message):
 @bot.event
 async def on_member_join(member):
     try:
-        recent_joins[member.id] = {
-            "time": discord.utils.utcnow(),
-            "channel": member.guild.system_channel
-        }
+        if ENABLE_CHICKEN_OUT:
+            recent_joins[member.id] = {
+                "time": discord.utils.utcnow(),
+                "channel": member.guild.system_channel
+            }
         print(f"👋 {member.name} joined the server")
     except Exception as e:
         print(f"❌ Error in on_member_join: {e}")
@@ -614,7 +772,7 @@ async def on_member_join(member):
 @bot.event
 async def on_member_remove(member):
     try:
-        if member.id in recent_joins:
+        if ENABLE_CHICKEN_OUT and member.id in recent_joins:
             join_time = recent_joins[member.id]["time"]
             leave_time = discord.utils.utcnow()
             if (leave_time - join_time).total_seconds() <= CHICKEN_OUT_TIMEOUT:
@@ -635,27 +793,28 @@ async def on_member_remove(member):
     except Exception as e:
         print(f"❌ Error in on_member_remove: {e}")
 
-# Admin command to manually reload messages
-@bot.command(name='reload-msgs')
-@commands.has_permissions(administrator=True)
-async def reload_msgs(ctx):
+# Slash command to manually reload messages
+@bot.tree.command(name="reload-msgs", description="Manually reload message lists from files")
+@app_commands.default_permissions(administrator=True)
+async def reload_msgs(interaction: discord.Interaction):
     """Manually reload message lists from files"""
     global default_msgs, mention_msgs
     default_msgs = load_msgs_from_file(DEFAULT_MSGS_FILE)
     mention_msgs = load_msgs_from_file(MENTION_MSGS_FILE)
-    await ctx.send(f"✅ Message lists manually reloaded!\n📊 Default messages: {len(default_msgs)}\n📊 Mention messages: {len(mention_msgs)}")
-    print(f"🔄 Manual reload by {ctx.author.name}: Default={len(default_msgs)}, Mention={len(mention_msgs)}")
+    await interaction.response.send_message(f"✅ Message lists manually reloaded!\n📊 Default messages: {len(default_msgs)}\n📊 Mention messages: {len(mention_msgs)}", ephemeral=True)
+    print(f"🔄 Manual reload by {interaction.user.name}: Default={len(default_msgs)}, Mention={len(mention_msgs)}")
 
-# Command to show current message counts
-@bot.command(name='msg-count')
-async def msg_count(ctx):
+# Slash command to show current message counts
+@bot.tree.command(name="msg-count", description="Show current message counts")
+async def msg_count(interaction: discord.Interaction):
     """Show current message counts"""
-    await ctx.send(f"📊 Current message counts:\n🔹 Default messages: {len(default_msgs)}\n🔹 Mention messages: {len(mention_msgs)}")
+    await interaction.response.send_message(f"📊 Current message counts:\n🔹 Default messages: {len(default_msgs)}\n🔹 Mention messages: {len(mention_msgs)}", ephemeral=True)
 
-# Command to list all messages (admin only for security)
-@bot.command(name='list-msgs')
-@commands.has_permissions(administrator=True)
-async def list_msgs(ctx, list_type: str = "default"):
+# Slash command to list all messages
+@bot.tree.command(name="list-msgs", description="List messages from specified list")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(list_type="Which list to display: 'default' or 'mention'")
+async def list_msgs(interaction: discord.Interaction, list_type: str = "default"):
     """List messages from specified list (default/mention)"""
     if list_type.lower() == "default":
         msgs = default_msgs
@@ -664,48 +823,51 @@ async def list_msgs(ctx, list_type: str = "default"):
         msgs = mention_msgs
         title = "Mention messages"
     else:
-        await ctx.send("❌ Invalid list type. Use 'default' or 'mention'.")
+        await interaction.response.send_message("❌ Invalid list type. Use 'default' or 'mention'.", ephemeral=True)
         return
     
     if not msgs:
-        await ctx.send(f"📭 No messages found in {title} list.")
+        await interaction.response.send_message(f"📭 No messages found in {title} list.", ephemeral=True)
         return
     
     # Create embed with pagination if needed
     chunk_size = 10
     chunks = [msgs[i:i + chunk_size] for i in range(0, len(msgs), chunk_size)]
     
-    for i, chunk in enumerate(chunks):
+    # Send first chunk with interaction response
+    if chunks:
         embed = discord.Embed(
-            title=f"{title} (Page {i+1}/{len(chunks)})",
-            color=discord.Color.green()
+            title=f"{title} (Page 1/{len(chunks)})",
+            color=discord.Color(int(SUCCESS_COLOR, 16))
         )
         
+        chunk = chunks[0]
         for j, msg in enumerate(chunk, 1):
             embed.add_field(
-                name=f"{j + i*chunk_size}. Message",
+                name=f"{j}. Message",
                 value=msg,
                 inline=False
             )
         
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        
+        # Send remaining pages as follow-ups
+        for i, chunk in enumerate(chunks[1:], 1):
+            embed = discord.Embed(
+                title=f"{title} (Page {i+1}/{len(chunks)})",
+                color=discord.Color(int(SUCCESS_COLOR, 16))
+            )
+            
+            for j, msg in enumerate(chunk, 1):
+                embed.add_field(
+                    name=f"{j + i*chunk_size}. Message",
+                    value=msg,
+                    inline=False
+                )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
-# Error handler
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have permission to use this command!")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Missing required argument! Please check the command syntax.")
-    elif isinstance(error, commands.CommandNotFound):
-        # Don't respond to unknown commands to avoid spam
-        return
-    else:
-        print(f"❌ Command error: {error}")
-        print(f"   Command: {ctx.command}")
-        print(f"   Author: {ctx.author}")
-        await ctx.send(f"❌ An error occurred while executing the command: {error}")
-
+# Error handler for slash commands
 @bot.event
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
     """Handle slash command errors"""

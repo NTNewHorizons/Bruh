@@ -5,9 +5,6 @@
 # Discord Bot Token (REQUIRED)
 TOKEN=YOUR_BOT_TOKEN_HERE
 
-# Bot command prefix
-COMMAND_PREFIX=!
-
 # ===== MESSAGE FILES =====
 # File path for default messages
 DEFAULT_MSGS_FILE=default_msgs.txt
@@ -48,3 +45,67 @@ CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063
 # ===== PERMISSIONS =====
 # Authorized user ID for approving/declining suggestions (numeric ID)
 AUTHORIZED_USER_ID=1209428799289032704
+
+# ===== FEATURE TOGGLES =====
+# Enable/disable random message responses
+ENABLE_RANDOM_MESSAGES=true
+
+# Enable/disable mention responses
+ENABLE_MENTION_RESPONSES=true
+
+# Enable/disable special channel auto-threading
+ENABLE_SPECIAL_CHANNEL=true
+
+# Enable/disable chicken out detection
+ENABLE_CHICKEN_OUT=true
+
+# Enable/disable message suggestion system
+ENABLE_SUGGESTIONS=true
+
+# Enable/disable rape command
+ENABLE_RAPE_COMMAND=true
+
+# ===== SUGGESTION BUTTON EMOJIS =====
+# Emoji for reject button
+REJECT_BUTTON_EMOJI=🗑️
+REJECT_BUTTON_LABEL=❌ Reject
+
+# Emoji for default list button
+DEFAULT_BUTTON_EMOJI=📌
+DEFAULT_BUTTON_LABEL=✅ Default
+
+# Emoji for mention list button
+MENTION_BUTTON_EMOJI=👋
+MENTION_BUTTON_LABEL=✅ Mention
+
+# Emoji for both lists button
+BOTH_BUTTON_EMOJI=✨
+BOTH_BUTTON_LABEL=✅ Both
+
+# ===== SPECIAL CHANNEL REACTION EMOJIS =====
+# Custom emoji IDs for special channel reactions (leave empty for standard reactions)
+SPECIAL_CHANNEL_YES_EMOJI=1416494635660087467
+SPECIAL_CHANNEL_NO_EMOJI=1416494651195654277
+
+# ===== LOGGING MESSAGES =====
+# Messages for various events (use {user}, {member}, {channel}, {role} as placeholders)
+RANDOM_MESSAGE_LOG=Random message sent
+MENTION_RESPONSE_LOG=Responded to mention
+SUGGESTION_RECEIVED_LOG=Suggestion received
+RAPE_LOG={user} raped {member}
+CHICKEN_OUT_LOG={user} chickened out
+MEMBER_JOIN_LOG={user} joined the server
+MEMBER_LEAVE_LOG={user} left the server
+
+# ===== COLORS (HEX format without #) =====
+# Color for suggestion embed
+SUGGESTION_EMBED_COLOR=0x0099ff
+
+# Color for success messages
+SUCCESS_COLOR=00aa00
+
+# Color for error messages
+ERROR_COLOR=ff0000
+
+# Color for warning messages
+WARNING_COLOR=ffaa00
