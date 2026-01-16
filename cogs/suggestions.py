@@ -6,13 +6,15 @@ from discord.ext import commands
 from discord.ui import Button, View
 from discord import app_commands
 from config import config
-from messages import load_msgs_from_file, save_msgs_to_file
+from messages import load_msgs_from_file, load_audio_msgs_from_file, save_msgs_to_file, save_audio_msgs_to_file
 from utils.embeds import create_suggestion_embed
 
 
 # Global references (shared with main bot)
 default_msgs = []
 mention_msgs = []
+default_audio_msgs = []
+mention_audio_msgs = []
 
 
 class MsgSuggestionView(View):
@@ -126,6 +128,99 @@ class MsgSuggestionView(View):
         await interaction.response.send_message(status_message, ephemeral=True)
         await interaction.message.edit(
             content=f"~~{interaction.message.content}~~\n\n✅ **Accepted for Both by {interaction.user.mention}**",
+            embed=None,
+            view=None
+        )
+    
+    @discord.ui.button(label="✅ Default Audio", style=discord.ButtonStyle.green, emoji="🎙️")
+    async def accept_default_audio_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Accept to default audio list button handler"""
+        if interaction.user.id != config['AUTHORIZED_USER_ID']:
+            await interaction.response.send_message("❌ You are not authorized to use this button.", ephemeral=True)
+            return
+        
+        global default_audio_msgs
+        
+        default_audio_msgs = load_audio_msgs_from_file(config['DEFAULT_AUDIO_MSGS_FILE'])
+        
+        if self.msg_content in default_audio_msgs:
+            await interaction.response.send_message("⚠️ This audio is already in the default audio list!", ephemeral=True)
+            return
+        
+        default_audio_msgs.append(self.msg_content)
+        save_audio_msgs_to_file(config['DEFAULT_AUDIO_MSGS_FILE'], default_audio_msgs)
+        
+        await interaction.response.send_message(f"✅ Audio message added to default list!", ephemeral=True)
+        await interaction.message.edit(
+            content=f"~~{interaction.message.content}~~\n\n✅ **Accepted for Default Audio by {interaction.user.mention}**",
+            embed=None,
+            view=None
+        )
+    
+    @discord.ui.button(label="✅ Mention Audio", style=discord.ButtonStyle.green, emoji="🎤")
+    async def accept_mention_audio_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Accept to mention audio list button handler"""
+        if interaction.user.id != config['AUTHORIZED_USER_ID']:
+            await interaction.response.send_message("❌ You are not authorized to use this button.", ephemeral=True)
+            return
+        
+        global mention_audio_msgs
+        
+        mention_audio_msgs = load_audio_msgs_from_file(config['MENTION_AUDIO_MSGS_FILE'])
+        
+        if self.msg_content in mention_audio_msgs:
+            await interaction.response.send_message("⚠️ This audio is already in the mention audio list!", ephemeral=True)
+            return
+        
+        mention_audio_msgs.append(self.msg_content)
+        save_audio_msgs_to_file(config['MENTION_AUDIO_MSGS_FILE'], mention_audio_msgs)
+        
+        await interaction.response.send_message(f"✅ Audio message added to mention list!", ephemeral=True)
+        await interaction.message.edit(
+            content=f"~~{interaction.message.content}~~\n\n✅ **Accepted for Mention Audio by {interaction.user.mention}**",
+            embed=None,
+            view=None
+        )
+    
+    @discord.ui.button(label="✅ Both Audio", style=discord.ButtonStyle.blurple, emoji="🎵")
+    async def accept_both_audio_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Accept to both audio lists button handler"""
+        if interaction.user.id != config['AUTHORIZED_USER_ID']:
+            await interaction.response.send_message("❌ You are not authorized to use this button.", ephemeral=True)
+            return
+        
+        global default_audio_msgs, mention_audio_msgs
+        
+        default_audio_msgs = load_audio_msgs_from_file(config['DEFAULT_AUDIO_MSGS_FILE'])
+        mention_audio_msgs = load_audio_msgs_from_file(config['MENTION_AUDIO_MSGS_FILE'])
+        
+        added_to_default = False
+        added_to_mention = False
+        
+        if self.msg_content not in default_audio_msgs:
+            default_audio_msgs.append(self.msg_content)
+            added_to_default = True
+        
+        if self.msg_content not in mention_audio_msgs:
+            mention_audio_msgs.append(self.msg_content)
+            added_to_mention = True
+        
+        save_audio_msgs_to_file(config['DEFAULT_AUDIO_MSGS_FILE'], default_audio_msgs)
+        save_audio_msgs_to_file(config['MENTION_AUDIO_MSGS_FILE'], mention_audio_msgs)
+        
+        status_message = ""
+        if not added_to_default and not added_to_mention:
+            status_message = "⚠️ This audio was already in both audio lists!"
+        elif added_to_default and added_to_mention:
+            status_message = "✅ Audio added to both audio lists!"
+        elif added_to_default:
+            status_message = "✅ Audio added to default audio list! (Already in mention audio list)"
+        elif added_to_mention:
+            status_message = "✅ Audio added to mention audio list! (Already in default audio list)"
+        
+        await interaction.response.send_message(status_message, ephemeral=True)
+        await interaction.message.edit(
+            content=f"~~{interaction.message.content}~~\n\n✅ **Accepted for Both Audio by {interaction.user.mention}**",
             embed=None,
             view=None
         )

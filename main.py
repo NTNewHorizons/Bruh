@@ -6,11 +6,13 @@ import asyncio
 import os
 from discord.ext import commands
 from config import config
-from messages import load_msgs_from_file, initialize_msg_files
+from messages import load_msgs_from_file, load_audio_msgs_from_file, initialize_msg_files
 
 # Global message lists (shared with cogs)
 default_msgs = []
 mention_msgs = []
+default_audio_msgs = []
+mention_audio_msgs = []
 
 
 def initialize_bot():
@@ -43,20 +45,24 @@ async def load_cogs(bot):
 
 def main():
     """Main function to start the bot"""
-    global default_msgs, mention_msgs
+    global default_msgs, mention_msgs, default_audio_msgs, mention_audio_msgs
     
     print("🚀 Starting bot...")
     
     # Load message lists
     default_msgs = load_msgs_from_file(config['DEFAULT_MSGS_FILE'])
     mention_msgs = load_msgs_from_file(config['MENTION_MSGS_FILE'])
+    default_audio_msgs = load_audio_msgs_from_file(config['DEFAULT_AUDIO_MSGS_FILE'])
+    mention_audio_msgs = load_audio_msgs_from_file(config['MENTION_AUDIO_MSGS_FILE'])
     
     # Initialize message files if empty
     try:
-        initialize_msg_files(default_msgs, mention_msgs)
+        initialize_msg_files(default_msgs, mention_msgs, default_audio_msgs, mention_audio_msgs)
         # Reload after initialization
         default_msgs = load_msgs_from_file(config['DEFAULT_MSGS_FILE'])
         mention_msgs = load_msgs_from_file(config['MENTION_MSGS_FILE'])
+        default_audio_msgs = load_audio_msgs_from_file(config['DEFAULT_AUDIO_MSGS_FILE'])
+        mention_audio_msgs = load_audio_msgs_from_file(config['MENTION_AUDIO_MSGS_FILE'])
     except Exception as e:
         print(f"❌ Error during initialization: {e}")
     
@@ -66,10 +72,16 @@ def main():
     import cogs.events
     cogs.suggestions.default_msgs = default_msgs
     cogs.suggestions.mention_msgs = mention_msgs
+    cogs.suggestions.default_audio_msgs = default_audio_msgs
+    cogs.suggestions.mention_audio_msgs = mention_audio_msgs
     cogs.commands.default_msgs = default_msgs
     cogs.commands.mention_msgs = mention_msgs
+    cogs.commands.default_audio_msgs = default_audio_msgs
+    cogs.commands.mention_audio_msgs = mention_audio_msgs
     cogs.events.default_msgs = default_msgs
     cogs.events.mention_msgs = mention_msgs
+    cogs.events.default_audio_msgs = default_audio_msgs
+    cogs.events.mention_audio_msgs = mention_audio_msgs
     
     # Initialize and run bot
     bot = initialize_bot()

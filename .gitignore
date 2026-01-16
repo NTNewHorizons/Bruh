@@ -1,3 +1,5 @@
 default_msgs.txt
 mention_msgs.txt
+default_audio_msgs.txt
+mention_audio_msgs.txt
 *.pyc

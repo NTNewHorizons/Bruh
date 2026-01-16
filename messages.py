@@ -22,6 +22,23 @@ def load_msgs_from_file(filename):
         return []
 
 
+def load_audio_msgs_from_file(filename):
+    """Load audio messages from file with automatic creation if missing"""
+    try:
+        if not os.path.exists(filename):
+            print(f"ℹ️  Creating new file: {filename}")
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write('')
+        
+        with open(filename, 'r', encoding='utf-8') as f:
+            audio_msgs = [line.strip() for line in f if line.strip()]
+            print(f"✅ Loaded {len(audio_msgs)} audio messages from {filename}")
+            return audio_msgs
+    except IOError as e:
+        print(f"❌ Error reading {filename}: {e}")
+        return []
+
+
 def save_msgs_to_file(filename, msgs):
     """Save messages to file"""
     try:
@@ -33,10 +50,23 @@ def save_msgs_to_file(filename, msgs):
         print(f"❌ Error writing to {filename}: {e}")
 
 
-def initialize_msg_files(default_msgs, mention_msgs):
+def save_audio_msgs_to_file(filename, msgs):
+    """Save audio messages to file"""
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            for msg in msgs:
+                f.write(f"{msg}\n")
+        print(f"✅ Saved {len(msgs)} audio messages to {filename}")
+    except IOError as e:
+        print(f"❌ Error writing to {filename}: {e}")
+
+
+def initialize_msg_files(default_msgs, mention_msgs, default_audio_msgs=None, mention_audio_msgs=None):
     """Initialize message files with default content if they're empty"""
     default_msgs_file = config['DEFAULT_MSGS_FILE']
     mention_msgs_file = config['MENTION_MSGS_FILE']
+    default_audio_msgs_file = config['DEFAULT_AUDIO_MSGS_FILE']
+    mention_audio_msgs_file = config['MENTION_AUDIO_MSGS_FILE']
     
     if len(default_msgs) == 0:
         print("⚠️  Default messages file is empty, initializing with default messages...")
@@ -78,3 +108,24 @@ def initialize_msg_files(default_msgs, mention_msgs):
             print(f"✅ Initialized mention messages file with {len(mention_template)} messages")
         except Exception as e:
             print(f"❌ Error initializing mention messages: {e}")
+    
+    # Initialize audio message files (they stay empty by default - users populate them)
+    if default_audio_msgs is None or len(default_audio_msgs) == 0:
+        if not os.path.exists(default_audio_msgs_file):
+            print(f"ℹ️  Creating new audio file: {default_audio_msgs_file}")
+            try:
+                with open(default_audio_msgs_file, 'w', encoding='utf-8') as f:
+                    f.write('# Add audio message file paths or Discord URLs below (one per line)\n')
+                print(f"✅ Created default audio messages file")
+            except Exception as e:
+                print(f"❌ Error creating default audio messages file: {e}")
+    
+    if mention_audio_msgs is None or len(mention_audio_msgs) == 0:
+        if not os.path.exists(mention_audio_msgs_file):
+            print(f"ℹ️  Creating new audio file: {mention_audio_msgs_file}")
+            try:
+                with open(mention_audio_msgs_file, 'w', encoding='utf-8') as f:
+                    f.write('# Add audio message file paths or Discord URLs below (one per line)\n')
+                print(f"✅ Created mention audio messages file")
+            except Exception as e:
+                print(f"❌ Error creating mention audio messages file: {e}")

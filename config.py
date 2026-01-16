@@ -23,6 +23,12 @@ DEFAULT_MSGS_FILE=default_msgs.txt
 # File path for mention messages
 MENTION_MSGS_FILE=mention_msgs.txt
 
+# File path for default audio messages (file paths or Discord attachment URLs)
+DEFAULT_AUDIO_MSGS_FILE=default_audio_msgs.txt
+
+# File path for mention audio messages (file paths or Discord attachment URLs)
+MENTION_AUDIO_MSGS_FILE=mention_audio_msgs.txt
+
 # ===== CHANNEL IDS =====
 # Channel for message suggestions
 SUGGESTION_CHANNEL_ID=1365676297589624903
@@ -44,6 +50,9 @@ SUGGESTION_PING_ROLE_ID=1365677261801521265
 # Chance (1 in X) to send a random default message (e.g., 100 = 1% chance)
 RANDOM_MESSAGE_CHANCE=100
 
+# Chance (1 in X) to send a random default audio message (e.g., 200 = 0.5% chance)
+RANDOM_AUDIO_MESSAGE_CHANCE=200
+
 # Time between auto-reloading messages from files (in seconds)
 MESSAGE_RELOAD_INTERVAL=300
 
@@ -61,8 +70,14 @@ AUTHORIZED_USER_ID=1209428799289032704
 # Enable/disable random message responses
 ENABLE_RANDOM_MESSAGES=true
 
+# Enable/disable random audio message responses
+ENABLE_RANDOM_AUDIO_MESSAGES=true
+
 # Enable/disable mention responses
 ENABLE_MENTION_RESPONSES=true
+
+# Enable/disable mention audio responses
+ENABLE_MENTION_AUDIO_RESPONSES=true
 
 # Enable/disable special channel auto-threading
 ENABLE_SPECIAL_CHANNEL=true
@@ -92,6 +107,18 @@ MENTION_BUTTON_LABEL=✅ Mention
 # Emoji for both lists button
 BOTH_BUTTON_EMOJI=✨
 BOTH_BUTTON_LABEL=✅ Both
+
+# Emoji for default audio list button
+DEFAULT_AUDIO_BUTTON_EMOJI=🎙️
+DEFAULT_AUDIO_BUTTON_LABEL=✅ Default Audio
+
+# Emoji for mention audio list button
+MENTION_AUDIO_BUTTON_EMOJI=🎤
+MENTION_AUDIO_BUTTON_LABEL=✅ Mention Audio
+
+# Emoji for both audio lists button
+BOTH_AUDIO_BUTTON_EMOJI=🎵
+BOTH_AUDIO_BUTTON_LABEL=✅ Both Audio
 
 # ===== SPECIAL CHANNEL REACTION EMOJIS =====
 # Custom emoji IDs for special channel reactions (leave empty for standard reactions)

@@ -5,12 +5,14 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from config import config
-from messages import load_msgs_from_file
+from messages import load_msgs_from_file, load_audio_msgs_from_file
 
 
 # Global references (shared with main bot)
 default_msgs = []
 mention_msgs = []
+default_audio_msgs = []
+mention_audio_msgs = []
 
 
 class CommandsCog(commands.Cog):
@@ -24,21 +26,23 @@ class CommandsCog(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def reload_msgs(self, interaction: discord.Interaction):
         """Manually reload message lists from files"""
-        global default_msgs, mention_msgs
+        global default_msgs, mention_msgs, default_audio_msgs, mention_audio_msgs
         default_msgs = load_msgs_from_file(config['DEFAULT_MSGS_FILE'])
         mention_msgs = load_msgs_from_file(config['MENTION_MSGS_FILE'])
+        default_audio_msgs = load_audio_msgs_from_file(config['DEFAULT_AUDIO_MSGS_FILE'])
+        mention_audio_msgs = load_audio_msgs_from_file(config['MENTION_AUDIO_MSGS_FILE'])
         await interaction.response.send_message(
-            f"✅ Message lists manually reloaded!\n📊 Default messages: {len(default_msgs)}\n📊 Mention messages: {len(mention_msgs)}",
+            f"✅ Message lists manually reloaded!\n📊 Default messages: {len(default_msgs)}\n📊 Mention messages: {len(mention_msgs)}\n🎙️ Default audio: {len(default_audio_msgs)}\n🎙️ Mention audio: {len(mention_audio_msgs)}",
             ephemeral=True
         )
-        print(f"🔄 Manual reload by {interaction.user.name}: Default={len(default_msgs)}, Mention={len(mention_msgs)}")
+        print(f"🔄 Manual reload by {interaction.user.name}: Default={len(default_msgs)}, Mention={len(mention_msgs)}, Default Audio={len(default_audio_msgs)}, Mention Audio={len(mention_audio_msgs)}")
     
     @commands.command()
     @app_commands.command(name="msg-count", description="Show current message counts")
     async def msg_count(self, interaction: discord.Interaction):
         """Show current message counts"""
         await interaction.response.send_message(
-            f"📊 Current message counts:\n🔹 Default messages: {len(default_msgs)}\n🔹 Mention messages: {len(mention_msgs)}",
+            f"📊 Current message counts:\n🔹 Default messages: {len(default_msgs)}\n🔹 Mention messages: {len(mention_msgs)}\n🎙️ Default audio: {len(default_audio_msgs)}\n🎙️ Mention audio: {len(mention_audio_msgs)}",
             ephemeral=True
         )
     

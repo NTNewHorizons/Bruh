@@ -5,12 +5,14 @@ import discord
 import random
 from discord.ext import commands
 from config import config
-from messages import load_msgs_from_file, save_msgs_to_file
+from messages import load_msgs_from_file, load_audio_msgs_from_file, save_msgs_to_file
 
 
 # Global references (shared with main bot)
 default_msgs = []
 mention_msgs = []
+default_audio_msgs = []
+mention_audio_msgs = []
 recent_joins = {}
 
 
@@ -81,11 +83,13 @@ class EventsCog(commands.Cog):
         # Auto-reload message lists every configured interval
         now = discord.utils.utcnow()
         if (now - self.last_msg_reload).total_seconds() >= config['MESSAGE_RELOAD_INTERVAL']:
-            global default_msgs, mention_msgs
+            global default_msgs, mention_msgs, default_audio_msgs, mention_audio_msgs
             default_msgs = load_msgs_from_file(config['DEFAULT_MSGS_FILE'])
             mention_msgs = load_msgs_from_file(config['MENTION_MSGS_FILE'])
+            default_audio_msgs = load_audio_msgs_from_file(config['DEFAULT_AUDIO_MSGS_FILE'])
+            mention_audio_msgs = load_audio_msgs_from_file(config['MENTION_AUDIO_MSGS_FILE'])
             self.last_msg_reload = now
-            print(f"🔄 Periodic reload: Default={len(default_msgs)}, Mention={len(mention_msgs)}")
+            print(f"🔄 Periodic reload: Default={len(default_msgs)}, Mention={len(mention_msgs)}, Default Audio={len(default_audio_msgs)}, Mention Audio={len(mention_audio_msgs)}")
         
         # Special channel handling
         if config['ENABLE_SPECIAL_CHANNEL'] and message.channel.id == config['SPECIAL_MESSAGE_CHANNEL_ID']:
@@ -117,6 +121,14 @@ class EventsCog(commands.Cog):
             except Exception as e:
                 print(f"❌ Error sending random message: {e}")
         
+        # Send random audio message based on configured chance
+        if config['ENABLE_RANDOM_AUDIO_MESSAGES'] and random.randint(1, config['RANDOM_AUDIO_MESSAGE_CHANCE']) == 1 and default_audio_msgs:
+            audio_msg = random.choice(default_audio_msgs)
+            try:
+                await self._send_audio_message(message.channel, audio_msg)
+            except Exception as e:
+                print(f"❌ Error sending random audio message: {e}")
+        
         # If bot is mentioned, send message from mention list
         if config['ENABLE_MENTION_RESPONSES'] and self.bot.user.mentioned_in(message) and mention_msgs:
             msg = random.choice(mention_msgs)
@@ -126,6 +138,42 @@ class EventsCog(commands.Cog):
                 print(f"❌ No permission to send messages in #{message.channel.name}")
             except Exception as e:
                 print(f"❌ Error sending mention message: {e}")
+        
+        # If bot is mentioned, send audio message from mention list
+        if config['ENABLE_MENTION_AUDIO_RESPONSES'] and self.bot.user.mentioned_in(message) and mention_audio_msgs:
+            audio_msg = random.choice(mention_audio_msgs)
+            try:
+                await self._send_audio_message(message.channel, audio_msg)
+            except Exception as e:
+                print(f"❌ Error sending mention audio message: {e}")
+    
+    async def _send_audio_message(self, channel, audio_source):
+        """Send an audio message to a channel"""
+        import os
+        
+        # Check if it's a file path or URL
+        if audio_source.startswith('http://') or audio_source.startswith('https://'):
+            # It's a URL (Discord attachment or external URL)
+            try:
+                await channel.send(audio_source)
+                print(f"🎙️ Sent audio URL to #{channel.name}")
+            except discord.Forbidden:
+                print(f"❌ No permission to send messages in #{channel.name}")
+            except Exception as e:
+                print(f"❌ Error sending audio URL: {e}")
+        else:
+            # It's a file path
+            if os.path.exists(audio_source):
+                try:
+                    with open(audio_source, 'rb') as audio_file:
+                        await channel.send(file=discord.File(audio_file, filename=os.path.basename(audio_source)))
+                    print(f"🎙️ Sent audio file to #{channel.name}: {os.path.basename(audio_source)}")
+                except discord.Forbidden:
+                    print(f"❌ No permission to send messages in #{channel.name}")
+                except Exception as e:
+                    print(f"❌ Error sending audio file: {e}")
+            else:
+                print(f"⚠️  Audio file not found: {audio_source}")
         
         await self.bot.process_commands(message)
     
