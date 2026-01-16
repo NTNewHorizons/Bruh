@@ -5,6 +5,90 @@ import os
 from config import config
 
 
+class MessageManager:
+    """Centralized manager for all message lists (text and audio)"""
+    
+    def __init__(self):
+        self.default = []
+        self.mention = []
+        self.default_audio = []
+        self.mention_audio = []
+        self._load_all()
+    
+    def _load_file(self, filename):
+        """Load messages from file with automatic creation if missing"""
+        try:
+            if not os.path.exists(filename):
+                print(f"ℹ️  Creating new file: {filename}")
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write('')
+            
+            with open(filename, 'r', encoding='utf-8') as f:
+                msgs = [line.strip() for line in f if line.strip()]
+                return msgs
+        except IOError as e:
+            print(f"❌ Error reading {filename}: {e}")
+            return []
+    
+    def _save_file(self, filename, msgs):
+        """Save messages to file"""
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                for msg in msgs:
+                    f.write(f"{msg}\n")
+            print(f"✅ Saved {len(msgs)} messages to {filename}")
+        except IOError as e:
+            print(f"❌ Error writing to {filename}: {e}")
+    
+    def _load_all(self):
+        """Load all message lists from files"""
+        self.default = self._load_file(config['DEFAULT_MSGS_FILE'])
+        self.mention = self._load_file(config['MENTION_MSGS_FILE'])
+        self.default_audio = self._load_file(config['DEFAULT_AUDIO_MSGS_FILE'])
+        self.mention_audio = self._load_file(config['MENTION_AUDIO_MSGS_FILE'])
+        print(f"✅ Loaded messages: Default={len(self.default)}, Mention={len(self.mention)}, Audio={len(self.default_audio) + len(self.mention_audio)}")
+    
+    def reload(self):
+        """Reload all message lists from files"""
+        self._load_all()
+    
+    def add_to_list(self, msg, list_type):
+        """Add message to specified list (default/mention/default_audio/mention_audio)"""
+        list_map = {
+            'default': self.default,
+            'mention': self.mention,
+            'default_audio': self.default_audio,
+            'mention_audio': self.mention_audio
+        }
+        
+        msgs = list_map.get(list_type, [])
+        if msg in msgs:
+            return False
+        msgs.append(msg)
+        self._save_file(self._get_filename(list_type), msgs)
+        return True
+    
+    def _get_filename(self, list_type):
+        """Get filename for list type"""
+        map_config = {
+            'default': 'DEFAULT_MSGS_FILE',
+            'mention': 'MENTION_MSGS_FILE',
+            'default_audio': 'DEFAULT_AUDIO_MSGS_FILE',
+            'mention_audio': 'MENTION_AUDIO_MSGS_FILE'
+        }
+        return config[map_config[list_type]]
+    
+    def get_counts(self):
+        """Get message counts for all lists"""
+        return {
+            'default': len(self.default),
+            'mention': len(self.mention),
+            'default_audio': len(self.default_audio),
+            'mention_audio': len(self.mention_audio)
+        }
+
+
+# Legacy function wrappers for backward compatibility
 def load_msgs_from_file(filename):
     """Load messages from file with automatic creation if missing"""
     try:
@@ -15,7 +99,6 @@ def load_msgs_from_file(filename):
         
         with open(filename, 'r', encoding='utf-8') as f:
             msgs = [line.strip() for line in f if line.strip()]
-            print(f"✅ Loaded {len(msgs)} messages from {filename}")
             return msgs
     except IOError as e:
         print(f"❌ Error reading {filename}: {e}")
@@ -32,7 +115,6 @@ def load_audio_msgs_from_file(filename):
         
         with open(filename, 'r', encoding='utf-8') as f:
             audio_msgs = [line.strip() for line in f if line.strip()]
-            print(f"✅ Loaded {len(audio_msgs)} audio messages from {filename}")
             return audio_msgs
     except IOError as e:
         print(f"❌ Error reading {filename}: {e}")
@@ -62,70 +144,5 @@ def save_audio_msgs_to_file(filename, msgs):
 
 
 def initialize_msg_files(default_msgs, mention_msgs, default_audio_msgs=None, mention_audio_msgs=None):
-    """Initialize message files with default content if they're empty"""
-    default_msgs_file = config['DEFAULT_MSGS_FILE']
-    mention_msgs_file = config['MENTION_MSGS_FILE']
-    default_audio_msgs_file = config['DEFAULT_AUDIO_MSGS_FILE']
-    mention_audio_msgs_file = config['MENTION_AUDIO_MSGS_FILE']
-    
-    if len(default_msgs) == 0:
-        print("⚠️  Default messages file is empty, initializing with default messages...")
-        default_template = [
-            "https://tenor.com/view/jetstream-sam-my-beloved-gif-22029076  ",
-            "https://tenor.com/view/team-fortress-есчипсы-gif-23573659",
-            "https://tenor.com/view/komaru-cat-tiny-bunny-horror-japanese-gif-11150797129126961638  ",
-            "https://media.discordapp.net/attachments/1015901608242065419/1021653518945366046/screw.gif?ex=68c651fc&is=68c5007c&hm=b4b1e407f4c2ed3f4fa712c9bf15c731ba566b263ec76d468e78438881c7df85&  ",
-            "https://tenor.com/view/dance-dancing-gif-26353220  ",
-            "https://tenor.com/view/frog-frog-laughing-gif-25708743  ",
-            "https://tenor.com/view/dfg-gif-26011452  ",
-            "https://media.discordapp.net/attachments/990895647949459456/1042076478348722186/doc_2022-11-07_22-02-32_1.gif?ex=68c6ca59&is=68c578d9&hm=527f0889fa6249bc5909ab96c781e534f1de57a58b0eb04679e09a8afd118e44&  ",
-            "damn",
-            ":wowzer:",
-            "cool!",
-            "nice one",
-            "lmao"
-        ]
-        try:
-            save_msgs_to_file(default_msgs_file, default_template)
-            print(f"✅ Initialized default messages file with {len(default_template)} messages")
-        except Exception as e:
-            print(f"❌ Error initializing default messages: {e}")
-    
-    if len(mention_msgs) == 0:
-        print("⚠️  Mention messages file is empty, initializing with default messages...")
-        mention_template = [
-            "https://tenor.com/view/komaru-cat-tiny-bunny-horror-japanese-gif-11150797129126961638  ",
-            "https://media.discordapp.net/attachments/990895647949459456/1042076478348722186/doc_2022-11-07_22-02-32_1.gif?ex=68c6ca59&is=68c578d9&hm=527f0889fa6249bc5909ab96c781e534f1de57a58b0eb04679e09a8afd118e44&  ",
-            "https://tenor.com/view/rock-one-eyebrow-raised-rock-staring-the-rock-gif-22113367  ",
-            "https://tenor.com/view/кот-смешной-кот-кот-ест-корм-кота-снимает-камера-cat-gif-10642232306186810479",
-            "https://tenor.com/view/cat-silly-boom-explosion-flabbergaster-gif-17414861278238654650  ",
-            "what's up?",
-            "hey there!",
-            "hi"
-        ]
-        try:
-            save_msgs_to_file(mention_msgs_file, mention_template)
-            print(f"✅ Initialized mention messages file with {len(mention_template)} messages")
-        except Exception as e:
-            print(f"❌ Error initializing mention messages: {e}")
-    
-    # Initialize audio message files (they stay empty by default - users populate them)
-    if default_audio_msgs is None or len(default_audio_msgs) == 0:
-        if not os.path.exists(default_audio_msgs_file):
-            print(f"ℹ️  Creating new audio file: {default_audio_msgs_file}")
-            try:
-                with open(default_audio_msgs_file, 'w', encoding='utf-8') as f:
-                    f.write('# Add audio message file paths or Discord URLs below (one per line)\n')
-                print(f"✅ Created default audio messages file")
-            except Exception as e:
-                print(f"❌ Error creating default audio messages file: {e}")
-    
-    if mention_audio_msgs is None or len(mention_audio_msgs) == 0:
-        if not os.path.exists(mention_audio_msgs_file):
-            print(f"ℹ️  Creating new audio file: {mention_audio_msgs_file}")
-            try:
-                with open(mention_audio_msgs_file, 'w', encoding='utf-8') as f:
-                    f.write('# Add audio message file paths or Discord URLs below (one per line)\n')
-                print(f"✅ Created mention audio messages file")
-            except Exception as e:
-                print(f"❌ Error creating mention audio messages file: {e}")
+    """Initialize message files with default content if they're empty - Legacy function"""
+    pass

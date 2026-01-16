@@ -3,76 +3,53 @@ Events cog for Discord event handlers (on_ready, on_message, member join/leave, 
 """
 import discord
 import random
+import os
 from discord.ext import commands
 from config import config
-from messages import load_msgs_from_file, load_audio_msgs_from_file, save_msgs_to_file
-
-
-# Global references (shared with main bot)
-default_msgs = []
-mention_msgs = []
-default_audio_msgs = []
-mention_audio_msgs = []
-recent_joins = {}
+from messages import MessageManager
 
 
 class EventsCog(commands.Cog):
     """Cog for handling Discord events"""
     
-    def __init__(self, bot):
+    def __init__(self, bot, msg_manager: MessageManager):
         self.bot = bot
+        self.msg_manager = msg_manager
         self.last_msg_reload = discord.utils.utcnow()
+        self.recent_joins = {}
     
     @commands.Cog.listener()
     async def on_ready(self):
         """Bot ready event"""
         print(f'✅ {self.bot.user} is online and ready!')
-        print(f'📊 Initial message counts: Default={len(default_msgs)}, Mention={len(mention_msgs)}')
+        counts = self.msg_manager.get_counts()
+        print(f'📊 Loaded: Default={counts["default"]}, Mention={counts["mention"]}')
         
-        if len(default_msgs) == 0:
-            print(f"⚠️  Warning: No default messages loaded. The bot won't respond to random triggers.")
-        if len(mention_msgs) == 0:
-            print(f"⚠️  Warning: No mention messages loaded. The bot won't respond to mentions.")
-        
-        # Verify all configured channels exist
-        channels_to_check = [
-            (config['SUGGESTION_CHANNEL_ID'], "Suggestion channel"),
-            (config['RAPE_CHANNEL_ID'], "Rape command channel"),
-            (config['SPECIAL_MESSAGE_CHANNEL_ID'], "Special message channel"),
-            (config['CHICKEN_OUT_CHANNEL_ID'], "Chicken out channel")
-        ]
-        
-        for channel_id, channel_name in channels_to_check:
+        # Verify channels exist
+        for channel_id, name in [
+            (config['SUGGESTION_CHANNEL_ID'], "Suggestion"),
+            (config['RAPE_CHANNEL_ID'], "Rape"),
+            (config['SPECIAL_MESSAGE_CHANNEL_ID'], "Special"),
+            (config['CHICKEN_OUT_CHANNEL_ID'], "Chicken out")
+        ]:
             channel = self.bot.get_channel(channel_id)
-            if channel:
-                print(f"✅ {channel_name} found: #{channel.name}")
-            else:
-                print(f"❌ {channel_name} NOT FOUND (ID: {channel_id}). Please check your config!")
+            print(f"{'✅' if channel else '❌'} {name} channel: #{channel.name if channel else 'NOT FOUND'}")
         
         # Verify role exists
-        suggestion_role = None
         for guild in self.bot.guilds:
-            suggestion_role = guild.get_role(config['SUGGESTION_PING_ROLE_ID'])
-            if suggestion_role:
-                print(f"✅ Suggestion ping role found: @{suggestion_role.name}")
+            role = guild.get_role(config['SUGGESTION_PING_ROLE_ID'])
+            if role:
+                print(f"✅ Role found: @{role.name}")
                 break
+        else:
+            print(f"❌ Suggestion role NOT FOUND")
         
-        if not suggestion_role:
-            print(f"❌ Suggestion ping role NOT FOUND (ID: {config['SUGGESTION_PING_ROLE_ID']}). Please check your config!")
-        
-        # Ensure files exist with current data
-        try:
-            save_msgs_to_file(config['DEFAULT_MSGS_FILE'], default_msgs)
-            save_msgs_to_file(config['MENTION_MSGS_FILE'], mention_msgs)
-        except Exception as e:
-            print(f"❌ Error saving message files: {e}")
-        
-        # Sync command tree
+        # Sync commands
         try:
             await self.bot.tree.sync()
-            print('🔄 Command tree synced successfully')
+            print('🔄 Commands synced')
         except Exception as e:
-            print(f"❌ Error syncing command tree: {e}")
+            print(f"❌ Sync error: {e}")
     
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -80,158 +57,103 @@ class EventsCog(commands.Cog):
         if message.author == self.bot.user:
             return
         
-        # Auto-reload message lists every configured interval
+        # Auto-reload message lists every N seconds
         now = discord.utils.utcnow()
         if (now - self.last_msg_reload).total_seconds() >= config['MESSAGE_RELOAD_INTERVAL']:
-            global default_msgs, mention_msgs, default_audio_msgs, mention_audio_msgs
-            default_msgs = load_msgs_from_file(config['DEFAULT_MSGS_FILE'])
-            mention_msgs = load_msgs_from_file(config['MENTION_MSGS_FILE'])
-            default_audio_msgs = load_audio_msgs_from_file(config['DEFAULT_AUDIO_MSGS_FILE'])
-            mention_audio_msgs = load_audio_msgs_from_file(config['MENTION_AUDIO_MSGS_FILE'])
+            self.msg_manager.reload()
             self.last_msg_reload = now
-            print(f"🔄 Periodic reload: Default={len(default_msgs)}, Mention={len(mention_msgs)}, Default Audio={len(default_audio_msgs)}, Mention Audio={len(mention_audio_msgs)}")
+            counts = self.msg_manager.get_counts()
+            print(f"🔄 Reloaded: {counts}")
         
-        # Special channel handling
+        # Special channel: add reactions and create thread
         if config['ENABLE_SPECIAL_CHANNEL'] and message.channel.id == config['SPECIAL_MESSAGE_CHANNEL_ID']:
             try:
-                yes_emoji = f"<:yes:{config['SPECIAL_CHANNEL_YES_EMOJI']}>" if config['SPECIAL_CHANNEL_YES_EMOJI'] else '✅'
-                no_emoji = f"<:no:{config['SPECIAL_CHANNEL_NO_EMOJI']}>" if config['SPECIAL_CHANNEL_NO_EMOJI'] else '❌'
+                yes_emoji = config['SPECIAL_CHANNEL_YES_EMOJI'] or '✅'
+                no_emoji = config['SPECIAL_CHANNEL_NO_EMOJI'] or '❌'
                 
                 await message.add_reaction(yes_emoji)
                 await message.add_reaction(no_emoji)
                 
-                thread_name = message.content[:100] if message.content.strip() else "Discussion"
-                thread = await message.create_thread(name=thread_name)
-                
-                ping_message = await thread.send(f"{message.author.mention}")
-                await ping_message.delete()
-                
-            except discord.Forbidden:
-                print(f"❌ Missing permissions in special message channel. Check bot permissions!")
+                thread_name = (message.content[:100] if message.content.strip() else "Discussion")
+                await message.create_thread(name=thread_name)
             except Exception as e:
-                print(f"❌ Error processing message in channel {config['SPECIAL_MESSAGE_CHANNEL_ID']}: {e}")
+                print(f"❌ Special channel error: {e}")
         
-        # Send random message based on configured chance
-        if config['ENABLE_RANDOM_MESSAGES'] and random.randint(1, config['RANDOM_MESSAGE_CHANCE']) == 1 and default_msgs:
-            msg = random.choice(default_msgs)
-            try:
-                await message.channel.send(msg)
-            except discord.Forbidden:
-                print(f"❌ No permission to send messages in #{message.channel.name}")
-            except Exception as e:
-                print(f"❌ Error sending random message: {e}")
+        # Random message
+        if config['ENABLE_RANDOM_MESSAGES'] and self.msg_manager.default:
+            if random.randint(1, config['RANDOM_MESSAGE_CHANCE']) == 1:
+                await self._send_msg(message.channel, random.choice(self.msg_manager.default))
         
-        # Send random audio message based on configured chance
-        if config['ENABLE_RANDOM_AUDIO_MESSAGES'] and random.randint(1, config['RANDOM_AUDIO_MESSAGE_CHANCE']) == 1 and default_audio_msgs:
-            audio_msg = random.choice(default_audio_msgs)
-            try:
-                await self._send_audio_message(message.channel, audio_msg)
-            except Exception as e:
-                print(f"❌ Error sending random audio message: {e}")
+        # Random audio message
+        if config['ENABLE_RANDOM_AUDIO_MESSAGES'] and self.msg_manager.default_audio:
+            if random.randint(1, config['RANDOM_AUDIO_MESSAGE_CHANCE']) == 1:
+                await self._send_audio(message.channel, random.choice(self.msg_manager.default_audio))
         
-        # If bot is mentioned, send message from mention list
-        if config['ENABLE_MENTION_RESPONSES'] and self.bot.user.mentioned_in(message) and mention_msgs:
-            msg = random.choice(mention_msgs)
-            try:
-                await message.channel.send(msg)
-            except discord.Forbidden:
-                print(f"❌ No permission to send messages in #{message.channel.name}")
-            except Exception as e:
-                print(f"❌ Error sending mention message: {e}")
+        # Mention responses
+        if config['ENABLE_MENTION_RESPONSES'] and self.bot.user.mentioned_in(message) and self.msg_manager.mention:
+            await self._send_msg(message.channel, random.choice(self.msg_manager.mention))
         
-        # If bot is mentioned, send audio message from mention list
-        if config['ENABLE_MENTION_AUDIO_RESPONSES'] and self.bot.user.mentioned_in(message) and mention_audio_msgs:
-            audio_msg = random.choice(mention_audio_msgs)
-            try:
-                await self._send_audio_message(message.channel, audio_msg)
-            except Exception as e:
-                print(f"❌ Error sending mention audio message: {e}")
+        # Mention audio responses
+        if config['ENABLE_MENTION_AUDIO_RESPONSES'] and self.bot.user.mentioned_in(message) and self.msg_manager.mention_audio:
+            await self._send_audio(message.channel, random.choice(self.msg_manager.mention_audio))
     
-    async def _send_audio_message(self, channel, audio_source):
-        """Send an audio message to a channel"""
-        import os
-        
-        # Check if it's a file path or URL
-        if audio_source.startswith('http://') or audio_source.startswith('https://'):
-            # It's a URL (Discord attachment or external URL)
-            try:
+    async def _send_msg(self, channel, msg):
+        """Send a text message"""
+        try:
+            await channel.send(msg)
+        except discord.Forbidden:
+            print(f"❌ No permission in #{channel.name}")
+        except Exception as e:
+            print(f"❌ Error sending message: {e}")
+    
+    async def _send_audio(self, channel, audio_source):
+        """Send an audio message (URL or file)"""
+        try:
+            if audio_source.startswith(('http://', 'https://')):
                 await channel.send(audio_source)
-                print(f"🎙️ Sent audio URL to #{channel.name}")
-            except discord.Forbidden:
-                print(f"❌ No permission to send messages in #{channel.name}")
-            except Exception as e:
-                print(f"❌ Error sending audio URL: {e}")
-        else:
-            # It's a file path
-            if os.path.exists(audio_source):
-                try:
-                    with open(audio_source, 'rb') as audio_file:
-                        await channel.send(file=discord.File(audio_file, filename=os.path.basename(audio_source)))
-                    print(f"🎙️ Sent audio file to #{channel.name}: {os.path.basename(audio_source)}")
-                except discord.Forbidden:
-                    print(f"❌ No permission to send messages in #{channel.name}")
-                except Exception as e:
-                    print(f"❌ Error sending audio file: {e}")
+            elif os.path.exists(audio_source):
+                await channel.send(file=discord.File(audio_source))
             else:
-                print(f"⚠️  Audio file not found: {audio_source}")
-        
-        await self.bot.process_commands(message)
-    
+                print(f"⚠️ Audio not found: {audio_source}")
+        except discord.Forbidden:
+            print(f"❌ No permission in #{channel.name}")
+        except Exception as e:
+            print(f"❌ Error sending audio: {e}")
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        """Member join event"""
-        try:
-            if config['ENABLE_CHICKEN_OUT']:
-                recent_joins[member.id] = {
-                    "time": discord.utils.utcnow(),
-                    "channel": member.guild.system_channel
-                }
-            print(f"👋 {member.name} joined the server")
-        except Exception as e:
-            print(f"❌ Error in on_member_join: {e}")
+        if config['ENABLE_CHICKEN_OUT']:
+            self.recent_joins[member.id] = {"time": discord.utils.utcnow()}
+        print(f"👋 {member.name} joined")
     
     @commands.Cog.listener()
     async def on_member_remove(self, member):
-        """Member remove event"""
-        try:
-            if config['ENABLE_CHICKEN_OUT'] and member.id in recent_joins:
-                join_time = recent_joins[member.id]["time"]
-                leave_time = discord.utils.utcnow()
-                if (leave_time - join_time).total_seconds() <= config['CHICKEN_OUT_TIMEOUT']:
-                    channel = self.bot.get_channel(config['CHICKEN_OUT_CHANNEL_ID'])
-                    if channel:
-                        try:
-                            await channel.send(f"{member.mention} chickened out")
-                            await channel.send(config['CHICKENED_OUT_MSG'])
-                            print(f"🐔 {member.name} chickened out")
-                        except discord.Forbidden:
-                            print(f"❌ No permission to send messages in chicken out channel")
-                        except Exception as e:
-                            print(f"❌ Error sending chicken out message: {e}")
-                    else:
-                        print(f"❌ Chicken out channel not found (ID: {config['CHICKEN_OUT_CHANNEL_ID']})")
-                
-                del recent_joins[member.id]
-        except Exception as e:
-            print(f"❌ Error in on_member_remove: {e}")
+        if config['ENABLE_CHICKEN_OUT'] and member.id in self.recent_joins:
+            join_time = self.recent_joins[member.id]["time"]
+            if (discord.utils.utcnow() - join_time).total_seconds() <= config['CHICKEN_OUT_TIMEOUT']:
+                channel = self.bot.get_channel(config['CHICKEN_OUT_CHANNEL_ID'])
+                if channel:
+                    try:
+                        await channel.send(f"{member.mention} chickened out\n{config['CHICKENED_OUT_MSG']}")
+                        print(f"🐔 {member.name} chickened out")
+                    except Exception as e:
+                        print(f"❌ Error: {e}")
+            del self.recent_joins[member.id]
     
     @commands.Cog.listener()
     async def on_app_command_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-        """Slash command error handler"""
-        error_message = f"❌ Error: {error}"
-        print(f"❌ Slash command error: {error}")
-        print(f"   Command: {interaction.command.name if interaction.command else 'Unknown'}")
-        print(f"   User: {interaction.user}")
-        
+        print(f"❌ Command error: {error}")
         try:
+            msg = f"❌ Error: {error}"
             if interaction.response.is_done():
-                await interaction.followup.send(error_message, ephemeral=True)
+                await interaction.followup.send(msg, ephemeral=True)
             else:
-                await interaction.response.send_message(error_message, ephemeral=True)
+                await interaction.response.send_message(msg, ephemeral=True)
         except Exception as e:
-            print(f"❌ Error sending error message: {e}")
+            print(f"❌ Error handler failed: {e}")
+
 
 
 async def setup(bot):
     """Setup function to load the cog"""
-    await bot.add_cog(EventsCog(bot))
+    msg_manager = MessageManager()
+    await bot.add_cog(EventsCog(bot, msg_manager))
