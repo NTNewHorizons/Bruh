@@ -1,0 +1,8 @@
+# Your application token
+TOKEN=
+# Messages
+DEFAULT_MSGS_FILE=default_msgs.txt
+MENTION_MSGS_FILE=mention_msgs.txt
+CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063  
+# Authorized user ID for approving/declining suggestions
+AUTHORIZED_USER_ID=
