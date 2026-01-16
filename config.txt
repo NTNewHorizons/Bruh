@@ -1,8 +1,50 @@
-# Your application token
-TOKEN=
-# Messages
+# Discord Bot Configuration File
+# Fill in the values below with your actual configuration
+
+# ===== CORE SETTINGS =====
+# Discord Bot Token (REQUIRED)
+TOKEN=YOUR_BOT_TOKEN_HERE
+
+# Bot command prefix
+COMMAND_PREFIX=!
+
+# ===== MESSAGE FILES =====
+# File path for default messages
 DEFAULT_MSGS_FILE=default_msgs.txt
+
+# File path for mention messages
 MENTION_MSGS_FILE=mention_msgs.txt
-CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063  
-# Authorized user ID for approving/declining suggestions
-AUTHORIZED_USER_ID=
+
+# ===== CHANNEL IDS =====
+# Channel for message suggestions
+SUGGESTION_CHANNEL_ID=1365676297589624903
+
+# Channel for the "rape" command
+RAPE_CHANNEL_ID=1420163750551617677
+
+# Channel for special message handling (auto-thread creation)
+SPECIAL_MESSAGE_CHANNEL_ID=1416584800457723965
+
+# Channel for "chicken out" notifications
+CHICKEN_OUT_CHANNEL_ID=1365834457864732732
+
+# ===== ROLE IDS =====
+# Role to mention when a message is suggested
+SUGGESTION_PING_ROLE_ID=1365677261801521265
+
+# ===== BOT BEHAVIORS =====
+# Chance (1 in X) to send a random default message (e.g., 100 = 1% chance)
+RANDOM_MESSAGE_CHANCE=100
+
+# Time between auto-reloading messages from files (in seconds)
+MESSAGE_RELOAD_INTERVAL=300
+
+# Time window for "chicken out" detection after joining (in seconds)
+CHICKEN_OUT_TIMEOUT=900
+
+# Message to send when someone chickens out
+CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063
+
+# ===== PERMISSIONS =====
+# Authorized user ID for approving/declining suggestions (numeric ID)
+AUTHORIZED_USER_ID=1209428799289032704
