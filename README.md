@@ -144,4 +144,4 @@ For issues, check console output or Discord logs.
 
 ## License
 
-This project is open-source. Use at your own risk!
+This project is under WTFPL license so Do What The Fuck You Want To
