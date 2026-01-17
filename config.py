@@ -121,7 +121,7 @@ BOTH_AUDIO_BUTTON_EMOJI=🎵
 BOTH_AUDIO_BUTTON_LABEL=✅ Both Audio
 
 # ===== SPECIAL CHANNEL REACTION EMOJIS =====
-# Custom emoji IDs for special channel reactions (leave empty for standard reactions)
+# Custom emoji for special channel reactions (use <:name:id> format or leave empty for standard reactions)
 SPECIAL_CHANNEL_YES_EMOJI=1416494635660087467
 SPECIAL_CHANNEL_NO_EMOJI=1416494651195654277
 
@@ -181,8 +181,7 @@ def load_config():
                     numeric_fields = ['AUTHORIZED_USER_ID', 'SUGGESTION_CHANNEL_ID', 'RAPE_CHANNEL_ID',
                                      'SPECIAL_MESSAGE_CHANNEL_ID', 'CHICKEN_OUT_CHANNEL_ID',
                                      'SUGGESTION_PING_ROLE_ID', 'RANDOM_MESSAGE_CHANCE',
-                                     'MESSAGE_RELOAD_INTERVAL', 'CHICKEN_OUT_TIMEOUT',
-                                     'SPECIAL_CHANNEL_YES_EMOJI', 'SPECIAL_CHANNEL_NO_EMOJI']
+                                     'MESSAGE_RELOAD_INTERVAL', 'CHICKEN_OUT_TIMEOUT']
                     
                     # Convert boolean fields
                     boolean_fields = ['ENABLE_RANDOM_MESSAGES', 'ENABLE_MENTION_RESPONSES',
