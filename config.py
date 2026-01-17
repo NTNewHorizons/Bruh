@@ -31,20 +31,20 @@ MENTION_AUDIO_MSGS_FILE=mention_audio_msgs.txt
 
 # ===== CHANNEL IDS =====
 # Channel for message suggestions
-SUGGESTION_CHANNEL_ID=1365676297589624903
+SUGGESTION_CHANNEL_ID=
 
 # Channel for the "rape" command
-RAPE_CHANNEL_ID=1420163750551617677
+RAPE_CHANNEL_ID=
 
 # Channel for special message handling (auto-thread creation)
-SPECIAL_MESSAGE_CHANNEL_ID=1416584800457723965
+SPECIAL_MESSAGE_CHANNEL_ID=
 
 # Channel for "chicken out" notifications
-CHICKEN_OUT_CHANNEL_ID=1365834457864732732
+CHICKEN_OUT_CHANNEL_ID=
 
 # ===== ROLE IDS =====
 # Role to mention when a message is suggested
-SUGGESTION_PING_ROLE_ID=1365677261801521265
+SUGGESTION_PING_ROLE_ID=
 
 # ===== BOT BEHAVIORS =====
 # Chance (1 in X) to send a random default message (e.g., 100 = 1% chance)
@@ -71,16 +71,16 @@ AUTHORIZED_USER_ID=1209428799289032704
 ENABLE_RANDOM_MESSAGES=true
 
 # Enable/disable random audio message responses
-ENABLE_RANDOM_AUDIO_MESSAGES=true
+ENABLE_RANDOM_AUDIO_MESSAGES=false
 
 # Enable/disable mention responses
 ENABLE_MENTION_RESPONSES=true
 
 # Enable/disable mention audio responses
-ENABLE_MENTION_AUDIO_RESPONSES=true
+ENABLE_MENTION_AUDIO_RESPONSES=false
 
 # Enable/disable special channel auto-threading
-ENABLE_SPECIAL_CHANNEL=true
+ENABLE_SPECIAL_CHANNEL=false
 
 # Enable/disable chicken out detection
 ENABLE_CHICKEN_OUT=true
@@ -89,7 +89,7 @@ ENABLE_CHICKEN_OUT=true
 ENABLE_SUGGESTIONS=true
 
 # Enable/disable rape command
-ENABLE_RAPE_COMMAND=true
+ENABLE_RAPE_COMMAND=false
 
 # ===== SUGGESTION BUTTON EMOJIS =====
 # Emoji for reject button

@@ -101,10 +101,10 @@ def load_config():
     optional_defaults = {
         'ENABLE_RANDOM_MESSAGES': True,
         'ENABLE_MENTION_RESPONSES': True,
-        'ENABLE_SPECIAL_CHANNEL': True,
+        'ENABLE_SPECIAL_CHANNEL': False,
         'ENABLE_CHICKEN_OUT': True,
         'ENABLE_SUGGESTIONS': True,
-        'ENABLE_RAPE_COMMAND': True,
+        'ENABLE_RAPE_COMMAND': False,
         'REJECT_BUTTON_EMOJI': '🗑️',
         'REJECT_BUTTON_LABEL': '❌ Reject',
         'DEFAULT_BUTTON_EMOJI': '📌',
@@ -113,8 +113,8 @@ def load_config():
         'MENTION_BUTTON_LABEL': '✅ Mention',
         'BOTH_BUTTON_EMOJI': '✨',
         'BOTH_BUTTON_LABEL': '✅ Both',
-        'SPECIAL_CHANNEL_YES_EMOJI': '1416494635660087467',
-        'SPECIAL_CHANNEL_NO_EMOJI': '1416494651195654277',
+        'SPECIAL_CHANNEL_YES_EMOJI': '',
+        'SPECIAL_CHANNEL_NO_EMOJI': '',
         'SUGGESTION_EMBED_COLOR': '0x0099ff',
         'SUCCESS_COLOR': '00aa00',
         'ERROR_COLOR': 'ff0000',
@@ -148,20 +148,20 @@ MENTION_MSGS_FILE=mention_msgs.txt
 
 # ===== CHANNEL IDS =====
 # Channel for message suggestions
-SUGGESTION_CHANNEL_ID=1365676297589624903
+SUGGESTION_CHANNEL_ID=
 
 # Channel for the "rape" command
 RAPE_CHANNEL_ID=1420163750551617677
 
 # Channel for special message handling (auto-thread creation)
-SPECIAL_MESSAGE_CHANNEL_ID=1416584800457723965
+SPECIAL_MESSAGE_CHANNEL_ID=
 
 # Channel for "chicken out" notifications
-CHICKEN_OUT_CHANNEL_ID=1365834457864732732
+CHICKEN_OUT_CHANNEL_ID=
 
 # ===== ROLE IDS =====
 # Role to mention when a message is suggested
-SUGGESTION_PING_ROLE_ID=1365677261801521265
+SUGGESTION_PING_ROLE_ID=
 
 # ===== BOT BEHAVIORS =====
 # Chance (1 in X) to send a random default message (e.g., 100 = 1% chance)
@@ -178,7 +178,7 @@ CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063
 
 # ===== PERMISSIONS =====
 # Authorized user ID for approving/declining suggestions (numeric ID)
-AUTHORIZED_USER_ID=1209428799289032704
+AUTHORIZED_USER_ID=
 
 # ===== FEATURE TOGGLES =====
 # Enable/disable random message responses
@@ -188,7 +188,7 @@ ENABLE_RANDOM_MESSAGES=true
 ENABLE_MENTION_RESPONSES=true
 
 # Enable/disable special channel auto-threading
-ENABLE_SPECIAL_CHANNEL=true
+ENABLE_SPECIAL_CHANNEL=false
 
 # Enable/disable chicken out detection
 ENABLE_CHICKEN_OUT=true
@@ -197,7 +197,7 @@ ENABLE_CHICKEN_OUT=true
 ENABLE_SUGGESTIONS=true
 
 # Enable/disable rape command
-ENABLE_RAPE_COMMAND=true
+ENABLE_RAPE_COMMAND=false
 
 # ===== SUGGESTION BUTTON EMOJIS =====
 # Emoji for reject button
@@ -218,8 +218,8 @@ BOTH_BUTTON_LABEL=✅ Both
 
 # ===== SPECIAL CHANNEL REACTION EMOJIS =====
 # Custom emoji IDs for special channel reactions (leave empty for standard reactions)
-SPECIAL_CHANNEL_YES_EMOJI=1416494635660087467
-SPECIAL_CHANNEL_NO_EMOJI=1416494651195654277
+SPECIAL_CHANNEL_YES_EMOJI=
+SPECIAL_CHANNEL_NO_EMOJI=
 
 # ===== LOGGING MESSAGES =====
 # Messages for various events (use {user}, {member}, {channel}, {role} as placeholders)
@@ -718,8 +718,8 @@ async def on_message(message):
     if ENABLE_SPECIAL_CHANNEL and message.channel.id == SPECIAL_MESSAGE_CHANNEL_ID:
         try:
             # Use custom emojis if provided, otherwise use standard ones
-            yes_emoji = f"<:yes:{SPECIAL_CHANNEL_YES_EMOJI}>" if SPECIAL_CHANNEL_YES_EMOJI else '✅'
-            no_emoji = f"<:no:{SPECIAL_CHANNEL_NO_EMOJI}>" if SPECIAL_CHANNEL_NO_EMOJI else '❌'
+            yes_emoji = f"<{SPECIAL_CHANNEL_YES_EMOJI}>" if SPECIAL_CHANNEL_YES_EMOJI else '✅'
+            no_emoji = f"<{SPECIAL_CHANNEL_NO_EMOJI}>" if SPECIAL_CHANNEL_NO_EMOJI else '❌'
             
             await message.add_reaction(yes_emoji)
             await message.add_reaction(no_emoji)
