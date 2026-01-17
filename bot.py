@@ -31,6 +31,10 @@ def load_config():
                     key = key.strip()
                     value = value.strip()
                     
+                    # Strip surrounding quotes if present
+                    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                        value = value[1:-1]
+                    
                     # Convert numeric fields to integers
                     numeric_fields = ['AUTHORIZED_USER_ID', 'SUGGESTION_CHANNEL_ID', 'RAPE_CHANNEL_ID',
                                      'SPECIAL_MESSAGE_CHANNEL_ID', 'CHICKEN_OUT_CHANNEL_ID',
@@ -251,6 +255,7 @@ config = load_config()
 
 # Core settings
 TOKEN = config['TOKEN']
+COMMAND_PREFIX = config.get('COMMAND_PREFIX', '!')
 
 # Message files
 DEFAULT_MSGS_FILE = config['DEFAULT_MSGS_FILE']
@@ -354,7 +359,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(intents=intents)
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 class MsgSuggestionView(View):
     def __init__(self, author_id, msg_content, message_id):
