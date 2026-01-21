@@ -4,6 +4,8 @@
 # ===== CORE SETTINGS =====
 # Discord Bot Token (REQUIRED)
 TOKEN=YOUR_BOT_TOKEN_HERE
+# Bot command prefix
+COMMAND_PREFIX=!
 
 # ===== MESSAGE FILES =====
 # File path for default messages
