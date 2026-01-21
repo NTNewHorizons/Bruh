@@ -24,8 +24,6 @@ def create_config_template(filename):
 # ===== CORE SETTINGS =====
 # Discord Bot Token (REQUIRED)
 TOKEN=YOUR_BOT_TOKEN_HERE
-# Bot command prefix
-COMMAND_PREFIX=!
 
 # ===== MESSAGE FILES =====
 # File path for default messages
@@ -266,7 +264,6 @@ def load_config():
         'SUCCESS_COLOR': '00aa00',
         'ERROR_COLOR': 'ff0000',
         'WARNING_COLOR': 'ffaa00',
-        'COMMAND_PREFIX': '!'
     }
     
     for key, default_value in optional_defaults.items():
@@ -451,8 +448,6 @@ async def send_audio_message(channel, audio_source):
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-
-bot = commands.Bot(command_prefix=config['COMMAND_PREFIX'], intents=intents)
 
 # Recent joins tracking for chicken out detection
 recent_joins = {}
