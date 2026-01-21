@@ -1,0 +1,114 @@
+# Bruh Bot Configuration File
+# Fill in the values below with your actual configuration
+
+# ===== CORE SETTINGS =====
+# Discord Bot Token (REQUIRED)
+TOKEN=YOUR_BOT_TOKEN_HERE
+# Bot command prefix
+COMMAND_PREFIX=!
+
+# ===== MESSAGE FILES =====
+# File path for default messages
+DEFAULT_MSGS_FILE=default_msgs.txt
+# File path for mention messages
+MENTION_MSGS_FILE=mention_msgs.txt
+# File path for default audio messages (file paths or Discord attachment URLs)
+DEFAULT_AUDIO_MSGS_FILE=default_audio_msgs.txt
+# File path for mention audio messages (file paths or Discord attachment URLs)
+MENTION_AUDIO_MSGS_FILE=mention_audio_msgs.txt
+
+# ===== CHANNEL IDS =====
+# Channel for message suggestions
+SUGGESTION_CHANNEL_ID=
+# Channel for the "rape" command
+RAPE_CHANNEL_ID=
+# Channel for special message handling (auto-thread creation)
+SPECIAL_MESSAGE_CHANNEL_ID=
+# Channel for "chicken out" notifications
+CHICKEN_OUT_CHANNEL_ID=
+
+# ===== ROLE IDS =====
+# Role to mention when a message is suggested
+SUGGESTION_PING_ROLE_ID=
+
+# ===== BOT BEHAVIORS =====
+# Chance (1 in X) to send a random default message (e.g., 100 = 1% chance)
+RANDOM_MESSAGE_CHANCE=100
+# Chance (1 in X) to send a random default audio message (e.g., 200 = 0.5% chance)
+RANDOM_AUDIO_MESSAGE_CHANCE=200
+# Time between auto-reloading messages from files (in seconds)
+MESSAGE_RELOAD_INTERVAL=300
+# Time window for "chicken out" detection after joining (in seconds)
+CHICKEN_OUT_TIMEOUT=900
+# Message to send when someone chickens out
+CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063
+
+# ===== PERMISSIONS =====
+# Authorized user ID for approving/declining suggestions (numeric ID)
+AUTHORIZED_USER_ID=
+
+# ===== FEATURE TOGGLES =====
+# Enable/disable random message responses
+ENABLE_RANDOM_MESSAGES=true
+# Enable/disable random audio message responses
+ENABLE_RANDOM_AUDIO_MESSAGES=false
+# Enable/disable mention responses
+ENABLE_MENTION_RESPONSES=true
+# Enable/disable mention audio responses
+ENABLE_MENTION_AUDIO_RESPONSES=false
+# Enable/disable special channel auto-threading
+ENABLE_SPECIAL_CHANNEL=false
+# Enable/disable chicken out detection
+ENABLE_CHICKEN_OUT=true
+# Enable/disable message suggestion system
+ENABLE_SUGGESTIONS=true
+# Enable/disable rape command
+ENABLE_RAPE_COMMAND=false
+
+# ===== SUGGESTION BUTTON EMOJIS =====
+# Emoji for reject button
+REJECT_BUTTON_EMOJI=🗑️
+REJECT_BUTTON_LABEL=❌ Reject
+# Emoji for default list button
+DEFAULT_BUTTON_EMOJI=📌
+DEFAULT_BUTTON_LABEL=✅ Default
+# Emoji for mention list button
+MENTION_BUTTON_EMOJI=👋
+MENTION_BUTTON_LABEL=✅ Mention
+# Emoji for both lists button
+BOTH_BUTTON_EMOJI=✨
+BOTH_BUTTON_LABEL=✅ Both
+# Emoji for default audio list button
+DEFAULT_AUDIO_BUTTON_EMOJI=🎙️
+DEFAULT_AUDIO_BUTTON_LABEL=✅ Default Audio
+# Emoji for mention audio list button
+MENTION_AUDIO_BUTTON_EMOJI=🎤
+MENTION_AUDIO_BUTTON_LABEL=✅ Mention Audio
+# Emoji for both audio lists button
+BOTH_AUDIO_BUTTON_EMOJI=🎵
+BOTH_AUDIO_BUTTON_LABEL=✅ Both Audio
+
+# ===== SPECIAL CHANNEL REACTION EMOJIS =====
+# Custom emoji for special channel reactions (use <:name:id> format or leave empty for standard reactions)
+SPECIAL_CHANNEL_YES_EMOJI=
+SPECIAL_CHANNEL_NO_EMOJI=
+
+# ===== LOGGING MESSAGES =====
+# Messages for various events (use {user}, {member}, {channel}, {role} as placeholders)
+RANDOM_MESSAGE_LOG=Random message sent
+MENTION_RESPONSE_LOG=Responded to mention
+SUGGESTION_RECEIVED_LOG=Suggestion received
+RAPE_LOG={user} raped {member}
+CHICKEN_OUT_LOG={user} chickened out
+MEMBER_JOIN_LOG={user} joined the server
+MEMBER_LEAVE_LOG={user} left the server
+
+# ===== COLORS (HEX format without #) =====
+# Color for suggestion embed
+SUGGESTION_EMBED_COLOR=0x0099ff
+# Color for success messages
+SUCCESS_COLOR=00aa00
+# Color for error messages
+ERROR_COLOR=ff0000
+# Color for warning messages
+WARNING_COLOR=ffaa00
