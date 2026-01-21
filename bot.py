@@ -452,6 +452,8 @@ intents.members = True
 # Recent joins tracking for chicken out detection
 recent_joins = {}
 
+bot = commands.Bot(command_prefix=config['COMMAND_PREFIX'], intents=intents)
+
 # ======================
 # SUGGESTION VIEW
 # ======================
