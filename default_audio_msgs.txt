@@ -1,4 +1,1 @@
-# Add audio message file paths or Discord URLs below (one per line)
-# Examples:
-# /path/to/audio.mp3
-# https://cdn.discordapp.com/attachments/...
+audio/mi-bombo-duolingo.mp3
