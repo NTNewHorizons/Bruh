@@ -1,11 +1,15 @@
 """
 Bruh Bot - Discord bot for random responses and community interactions
+Now with optional LLM integration via Ollama
 """
 import discord
 import random
 import os
 import pathlib
 import traceback
+import re
+import aiohttp
+import asyncio
 from discord.ext import commands
 from discord import app_commands
 
@@ -55,6 +59,35 @@ ENABLE_AUTO_THREAD=false
 ENABLE_CHICKEN_OUT=true
 ENABLE_SUGGESTIONS=true
 ENABLE_RAPE_COMMAND=false
+
+# -------------------------------------------------------
+# LLM Settings (via Ollama)
+# -------------------------------------------------------
+# Set ENABLE_LLM=true to have the bot respond with AI when
+# someone mentions it with a message (e.g. "@Bruh tell me a joke")
+# If the mention has NO message, it falls back to mention_msgs.txt as usual.
+ENABLE_LLM=false
+
+# Ollama API base URL (default: local, change if Ollama is on another machine)
+LLM_BASE_URL=http://localhost:11434
+
+# Model to use. Run `ollama list` to see installed models.
+LLM_MODEL=mistral
+
+# System prompt — defines the bot's personality
+LLM_SYSTEM_PROMPT=You are Bruh, a chaotic and sarcastic Discord bot. Keep all responses under 3 sentences. Be witty, slightly unhinged, and funny. Never be helpful in a boring way.
+
+# Max tokens the LLM will generate per response
+LLM_MAX_TOKENS=200
+
+# Seconds to wait for Ollama before giving up
+LLM_TIMEOUT=30
+
+# If LLM fails or times out, fall back to a random mention message instead of showing an error
+LLM_FALLBACK_ON_ERROR=true
+
+# Show a typing indicator while waiting for the LLM response
+LLM_TYPING_INDICATOR=true
 """
 
 
@@ -74,11 +107,12 @@ def load_config() -> dict:
     numeric_keys = {
         "SUGGESTION_CHANNEL_ID", "RAPE_CHANNEL_ID", "AUTO_THREAD_CHANNEL_ID",
         "CHICKEN_OUT_CHANNEL_ID", "SUGGESTION_PING_ROLE_ID", "AUTHORIZED_USER_ID",
-        "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT",
+        "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT", "LLM_MAX_TOKENS", "LLM_TIMEOUT",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
         "ENABLE_CHICKEN_OUT", "ENABLE_SUGGESTIONS", "ENABLE_RAPE_COMMAND",
+        "ENABLE_LLM", "LLM_FALLBACK_ON_ERROR", "LLM_TYPING_INDICATOR",
     }
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -120,6 +154,14 @@ def load_config() -> dict:
     config.setdefault("CHICKEN_OUT_TIMEOUT", 900)
     config.setdefault("CHICKENED_OUT_MSG", "https://tenor.com/view/walk-away-gif-8390063")
     config.setdefault("AUTHORIZED_USER_ID", 0)
+    config.setdefault("ENABLE_LLM", False)
+    config.setdefault("LLM_BASE_URL", "http://localhost:11434")
+    config.setdefault("LLM_MODEL", "mistral")
+    config.setdefault("LLM_SYSTEM_PROMPT", "You are Bruh, a sarcastic Discord bot. Keep responses short and funny.")
+    config.setdefault("LLM_MAX_TOKENS", 200)
+    config.setdefault("LLM_TIMEOUT", 30)
+    config.setdefault("LLM_FALLBACK_ON_ERROR", True)
+    config.setdefault("LLM_TYPING_INDICATOR", True)
 
     return config
 
@@ -169,6 +211,56 @@ class MessageLists:
 
 
 msgs = MessageLists()
+
+
+# ============================================================
+# LLM CLIENT
+# ============================================================
+
+def get_mention_text(message: discord.Message, bot_user: discord.ClientUser) -> str:
+    """Strip all @bot mentions from the message and return the remaining text."""
+    content = message.content
+    # Remove <@BOT_ID> and <@!BOT_ID> patterns
+    content = re.sub(rf"<@!?{bot_user.id}>", "", content).strip()
+    return content
+
+
+async def query_llm(prompt: str) -> str | None:
+    """
+    Send a prompt to Ollama and return the response text.
+    Returns None on failure.
+    """
+    url = f"{cfg['LLM_BASE_URL']}/api/chat"
+    payload = {
+        "model": cfg["LLM_MODEL"],
+        "stream": False,
+        "options": {
+            "num_predict": cfg["LLM_MAX_TOKENS"],
+        },
+        "messages": [
+            {"role": "system", "content": cfg["LLM_SYSTEM_PROMPT"]},
+            {"role": "user", "content": prompt},
+        ],
+    }
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=cfg["LLM_TIMEOUT"])
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload) as resp:
+                if resp.status != 200:
+                    print(f"❌ Ollama returned HTTP {resp.status}")
+                    return None
+                data = await resp.json()
+                return data.get("message", {}).get("content", "").strip()
+    except asyncio.TimeoutError:
+        print(f"❌ LLM request timed out after {cfg['LLM_TIMEOUT']}s")
+        return None
+    except aiohttp.ClientConnectorError:
+        print(f"❌ Cannot connect to Ollama at {cfg['LLM_BASE_URL']} — is it running?")
+        return None
+    except Exception as e:
+        print(f"❌ LLM error: {e}")
+        return None
 
 
 # ============================================================
@@ -303,6 +395,7 @@ async def on_ready():
     print(f"✅ {bot.user} is online!")
     print(f"   Default msgs : {len(msgs.default)}")
     print(f"   Mention msgs : {len(msgs.mention)}")
+    print(f"   LLM          : {'✅ ' + cfg['LLM_MODEL'] + ' @ ' + cfg['LLM_BASE_URL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
     try:
         await bot.tree.sync()
         print("🔄 Slash commands synced.")
@@ -339,13 +432,47 @@ async def on_message(message: discord.Message):
             pass
 
     # --- Mention response ---
-    if cfg["ENABLE_MENTION_RESPONSES"] and bot.user.mentioned_in(message) and msgs.mention:
-        try:
-            await message.channel.send(random.choice(msgs.mention))
-        except discord.Forbidden:
-            pass
+    if cfg["ENABLE_MENTION_RESPONSES"] and bot.user.mentioned_in(message):
+        mention_text = get_mention_text(message, bot.user)
+
+        # If there's actual message content AND LLM is enabled → use LLM
+        if mention_text and cfg["ENABLE_LLM"]:
+            await handle_llm_mention(message, mention_text)
+
+        # Otherwise fall back to mention_msgs list (bare ping, or LLM disabled)
+        elif msgs.mention:
+            try:
+                await message.channel.send(random.choice(msgs.mention))
+            except discord.Forbidden:
+                pass
 
     await bot.process_commands(message)
+
+
+async def handle_llm_mention(message: discord.Message, prompt: str):
+    """Call the LLM and send its response. Falls back to mention_msgs on failure if configured."""
+    try:
+        if cfg["LLM_TYPING_INDICATOR"]:
+            async with message.channel.typing():
+                response = await query_llm(prompt)
+        else:
+            response = await query_llm(prompt)
+
+        if response:
+            # Discord has a 2000 char limit — truncate just in case
+            if len(response) > 1990:
+                response = response[:1990] + "…"
+            await message.channel.send(response)
+        else:
+            raise ValueError("Empty response from LLM")
+
+    except Exception as e:
+        print(f"❌ LLM mention handler error: {e}")
+        if cfg["LLM_FALLBACK_ON_ERROR"] and msgs.mention:
+            try:
+                await message.channel.send(random.choice(msgs.mention))
+            except discord.Forbidden:
+                pass
 
 
 @bot.event
@@ -432,6 +559,38 @@ async def reload_msgs(interaction: discord.Interaction):
     )
 
 
+@bot.tree.command(name="llm-status", description="Check LLM connection status (admin only)")
+@app_commands.default_permissions(administrator=True)
+async def llm_status(interaction: discord.Interaction):
+    """Ping Ollama and report status."""
+    if not cfg["ENABLE_LLM"]:
+        await interaction.response.send_message("❌ LLM is disabled in config.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"{cfg['LLM_BASE_URL']}/api/tags") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    models = [m["name"] for m in data.get("models", [])]
+                    model_list = ", ".join(models) if models else "none"
+                    current = cfg["LLM_MODEL"]
+                    is_available = any(current in m for m in models)
+                    status = "✅" if is_available else "⚠️ model not found"
+                    await interaction.followup.send(
+                        f"**Ollama status:** ✅ Connected\n"
+                        f"**Active model:** `{current}` {status}\n"
+                        f"**Installed models:** `{model_list}`",
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.followup.send(f"⚠️ Ollama responded with HTTP {resp.status}", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Cannot reach Ollama: `{e}`", ephemeral=True)
+
+
 # ============================================================
 # CONTEXT MENU COMMANDS
 # ============================================================
@@ -479,6 +638,7 @@ if __name__ == "__main__":
     print(f"   Chicken out          : {'✅' if cfg['ENABLE_CHICKEN_OUT'] else '❌'}")
     print(f"   Suggestions          : {'✅' if cfg['ENABLE_SUGGESTIONS'] else '❌'}")
     print(f"   Rape command         : {'✅' if cfg['ENABLE_RAPE_COMMAND'] else '❌'}")
+    print(f"   LLM                  : {'✅ ' + cfg['LLM_MODEL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
 
     try:
         bot.run(cfg["TOKEN"])
