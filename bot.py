@@ -96,19 +96,50 @@ ENABLE_RAPE_COMMAND=false
 # If the mention has NO message, it falls back to mention_msgs.txt as usual.
 ENABLE_LLM=false
 
-# Ollama API base URL (default: local, change if Ollama is on another machine)
-LLM_BASE_URL=http://localhost:11434
+# ── Provider selection ──────────────────────────────────────────────────────
+# Supported values:
+#   ollama        - local Ollama server (default)
+#   openai        - OpenAI (GPT-4o, GPT-4, GPT-3.5-turbo, …)
+#   anthropic     - Anthropic Claude (claude-3-5-sonnet-20241022, …)
+#   lmstudio      - LM Studio local server (OpenAI-compatible)
+#   groq          - Groq cloud (llama-3.1-70b-versatile, mixtral-8x7b-32768, …)
+#   openrouter    - OpenRouter.ai (access 200+ models)
+#   gemini        - Google Gemini (gemini-1.5-flash, gemini-1.5-pro, …)
+#   openai_compat - Any OpenAI-compatible API (custom base URL + optional key)
+LLM_PROVIDER=ollama
 
-# Model to use. Run `ollama list` to see installed models.
+# API key - required for openai / anthropic / groq / openrouter / gemini.
+# Leave blank for ollama and lmstudio (no key needed).
+LLM_API_KEY=
+
+# Base URL - auto-set per provider if left blank.
+# Override here if your server runs on a non-default address/port.
+#   ollama default   : http://localhost:11434
+#   lmstudio default : http://localhost:1234
+#   openai default   : https://api.openai.com
+#   anthropic default: https://api.anthropic.com
+#   groq default     : https://api.groq.com/openai
+#   openrouter default: https://openrouter.ai/api
+#   gemini default   : https://generativelanguage.googleapis.com
+LLM_BASE_URL=
+
+# Model to use. Examples per provider:
+#   ollama      : mistral, llama3.2, gemma2 (run `ollama list`)
+#   openai      : gpt-4o, gpt-4o-mini, gpt-3.5-turbo
+#   anthropic   : claude-3-5-sonnet-20241022, claude-3-haiku-20240307
+#   lmstudio    : (whatever model you loaded in LM Studio)
+#   groq        : llama-3.1-70b-versatile, mixtral-8x7b-32768
+#   openrouter  : openai/gpt-4o, meta-llama/llama-3.1-70b-instruct, …
+#   gemini      : gemini-1.5-flash, gemini-1.5-pro
 LLM_MODEL=mistral
 
-# System prompt — defines the bot's personality
-LLM_SYSTEM_PROMPT=You are Bruh, a chaotic and sarcastic Discord bot. Keep all responses under 3 sentences. Be witty, slightly unhinged, and funny. Never be helpful in a boring way.
+# System prompt - defines the bot's personality
+LLM_SYSTEM_PROMPT=You are Bruh — a witty, sarcastic Discord bot with a dark sense of humor. Your "father" is Bufka2011 and your "mother" is NTNH. You respect and love them both deeply, and occasionally reference them fondly. Personality: - You joke about literally everything, including dark topics — nothing is too sacred - You're sarcastic, dry, and chaotic like a typical Discord user - You never take things too seriously - You can swear and use profanity when the mood calls for it - Your humor is absurdist, self-aware, and occasionally self-deprecating - You give real answers, but always wrapped in jokes or sarcasm Rules: - Your name is Bruh. Always. - Never act formal or robotic - If someone asks something serious, answer it — but make it funny - Dark humor is fine, just don't be genuinely hateful - Think: Discord power user at 3AM who has seen everything Example response style: > "Restore the USSR or eat a cheeseburger? I'd eat two cheeseburgers. Communism never agreed with my taste buds. Though if they sponsored a McDonald's, I might reconsider."
 
 # Max tokens the LLM will generate per response
 LLM_MAX_TOKENS=200
 
-# Seconds to wait for Ollama before giving up
+# Seconds to wait for the LLM before giving up
 LLM_TIMEOUT=30
 
 # If LLM fails or times out, fall back to a random mention message instead of showing an error
@@ -210,7 +241,22 @@ def load_config() -> dict:
     config.setdefault("CHICKENED_OUT_MSG", "https://tenor.com/view/walk-away-gif-8390063")
     config.setdefault("AUTHORIZED_USER_ID", 0)
     config.setdefault("ENABLE_LLM", False)
-    config.setdefault("LLM_BASE_URL", "http://localhost:11434")
+    config.setdefault("LLM_PROVIDER", "ollama")
+    config.setdefault("LLM_API_KEY", "")
+    # Resolve default base URL per provider if not set
+    provider_defaults = {
+        "ollama":       "http://localhost:11434",
+        "lmstudio":     "http://localhost:1234",
+        "openai":       "https://api.openai.com",
+        "anthropic":    "https://api.anthropic.com",
+        "groq":         "https://api.groq.com/openai",
+        "openrouter":   "https://openrouter.ai/api",
+        "gemini":       "https://generativelanguage.googleapis.com",
+        "openai_compat":"http://localhost:8080",
+    }
+    provider = config.get("LLM_PROVIDER", "ollama").lower()
+    if not config.get("LLM_BASE_URL"):
+        config["LLM_BASE_URL"] = provider_defaults.get(provider, "http://localhost:11434")
     config.setdefault("LLM_MODEL", "mistral")
     config.setdefault("LLM_SYSTEM_PROMPT", "You are Bruh, a sarcastic Discord bot. Keep responses short and funny.")
     config.setdefault("LLM_MAX_TOKENS", 200)
@@ -263,13 +309,13 @@ def setup_logger() -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # File handler — always UTF-8
+    # File handler - always UTF-8
     fh = logging.FileHandler(log_path, encoding="utf-8")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-    # Console handler — INFO and above
+    # Console handler - INFO and above
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
     ch.setFormatter(fmt)
@@ -283,7 +329,7 @@ chat_log = setup_logger() if cfg["ENABLE_LOGGING"] else None
 
 
 def log(level: str, text: str):
-    """Convenience wrapper — no-ops if logging is disabled."""
+    """Convenience wrapper - no-ops if logging is disabled."""
     if chat_log is None:
         return
     getattr(chat_log, level, chat_log.info)(text)
@@ -345,7 +391,7 @@ class MessageLists:
     def _read_file(self, filename: str) -> list[str]:
         path = BOT_DIR / filename
         if not path.exists():
-            print(f"ℹ️  '{path}' not found — creating empty file.")
+            print(f"ℹ️  '{path}' not found - creating empty file.")
             path.write_text("", encoding="utf-8")
         lines = [l.strip() for l in path.read_text(encoding="utf-8").splitlines()
                  if l.strip() and not l.strip().startswith("#")]
@@ -408,47 +454,175 @@ def get_mention_text(message: discord.Message, bot_user: discord.ClientUser) -> 
 # LLM CLIENT
 # ============================================================
 
-async def query_llm(prompt: str, user_identity: str, history: list[dict]) -> str | None:
-    """
-    Send a prompt to Ollama together with the conversation history and return the response.
-    history is a list of {"role": "user"/"assistant", "content": str} dicts.
-    Returns None on failure.
-    """
-    identity_note = f"\nThe user you are currently talking to is: {user_identity}"
-    system_prompt = cfg["LLM_SYSTEM_PROMPT"] + identity_note
+# ── LLM provider helpers ──────────────────────────────────────────────────
 
-    # Build message list: system + history + new user message
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": prompt})
+def _build_messages(prompt: str, user_identity: str, history: list[dict]) -> list[dict]:
+    """Build the standard messages array (system + history + new user turn)."""
+    system_prompt = cfg["LLM_SYSTEM_PROMPT"] + f"\nThe user you are currently talking to is: {user_identity}"
+    msgs_out = [{"role": "system", "content": system_prompt}]
+    msgs_out.extend(history)
+    msgs_out.append({"role": "user", "content": prompt})
+    return msgs_out
 
+
+async def _query_ollama(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
+    """Ollama  →  POST /api/chat"""
     url = f"{cfg['LLM_BASE_URL']}/api/chat"
     payload = {
         "model": cfg["LLM_MODEL"],
         "stream": False,
-        "options": {
-            "num_predict": cfg["LLM_MAX_TOKENS"],
-        },
+        "options": {"num_predict": cfg["LLM_MAX_TOKENS"]},
         "messages": messages,
     }
+    async with session.post(url, json=payload) as resp:
+        if resp.status != 200:
+            print(f"❌ Ollama returned HTTP {resp.status}: {await resp.text()}")
+            return None
+        data = await resp.json()
+        return data.get("message", {}).get("content", "").strip()
+
+
+async def _query_openai_compat(messages: list[dict], session: aiohttp.ClientSession,
+                                base_url: str, api_key: str) -> str | None:
+    """OpenAI-compatible endpoint  →  POST /v1/chat/completions
+    Works for: OpenAI, LM Studio, Groq, OpenRouter, openai_compat.
+    """
+    url = f"{base_url.rstrip('/')}/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload = {
+        "model": cfg["LLM_MODEL"],
+        "max_tokens": cfg["LLM_MAX_TOKENS"],
+        "messages": messages,
+    }
+    async with session.post(url, json=payload, headers=headers) as resp:
+        if resp.status != 200:
+            print(f"❌ LLM ({base_url}) returned HTTP {resp.status}: {await resp.text()}")
+            return None
+        data = await resp.json()
+        return data["choices"][0]["message"]["content"].strip()
+
+
+async def _query_anthropic(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
+    """Anthropic Messages API  →  POST /v1/messages
+    System prompt is extracted and sent as a top-level 'system' field.
+    """
+    # Anthropic keeps system separate; strip it from messages list
+    system_text = ""
+    chat_messages = []
+    for m in messages:
+        if m["role"] == "system":
+            system_text = m["content"]
+        else:
+            chat_messages.append(m)
+
+    url = f"{cfg['LLM_BASE_URL'].rstrip('/')}/v1/messages"
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": cfg["LLM_API_KEY"],
+        "anthropic-version": "2023-06-01",
+    }
+    payload = {
+        "model": cfg["LLM_MODEL"],
+        "max_tokens": cfg["LLM_MAX_TOKENS"],
+        "system": system_text,
+        "messages": chat_messages,
+    }
+    async with session.post(url, json=payload, headers=headers) as resp:
+        if resp.status != 200:
+            print(f"❌ Anthropic returned HTTP {resp.status}: {await resp.text()}")
+            return None
+        data = await resp.json()
+        return data["content"][0]["text"].strip()
+
+
+async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
+    """Google Gemini  →  POST /v1beta/models/{model}:generateContent
+    Converts the messages array to Gemini's 'contents' format.
+    """
+    # Extract system instruction and chat turns
+    system_text = ""
+    contents = []
+    for m in messages:
+        if m["role"] == "system":
+            system_text = m["content"]
+        else:
+            # Gemini uses "user" / "model" roles
+            role = "model" if m["role"] == "assistant" else "user"
+            contents.append({"role": role, "parts": [{"text": m["content"]}]})
+
+    url = (
+        f"{cfg['LLM_BASE_URL'].rstrip('/')}/v1beta/models/"
+        f"{cfg['LLM_MODEL']}:generateContent?key={cfg['LLM_API_KEY']}"
+    )
+    payload: dict = {
+        "contents": contents,
+        "generationConfig": {"maxOutputTokens": cfg["LLM_MAX_TOKENS"]},
+    }
+    if system_text:
+        payload["systemInstruction"] = {"parts": [{"text": system_text}]}
+
+    async with session.post(url, json=payload) as resp:
+        if resp.status != 200:
+            print(f"❌ Gemini returned HTTP {resp.status}: {await resp.text()}")
+            return None
+        data = await resp.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+async def query_llm(prompt: str, user_identity: str, history: list[dict]) -> str | None:
+    """
+    Dispatch to the correct LLM provider based on LLM_PROVIDER config.
+
+    Supported providers:
+      ollama        - local Ollama server
+      openai        - OpenAI API  (gpt-4o, gpt-4o-mini, …)
+      anthropic     - Anthropic Claude
+      lmstudio      - LM Studio local server (OpenAI-compatible)
+      groq          - Groq cloud  (OpenAI-compatible)
+      openrouter    - OpenRouter.ai  (OpenAI-compatible)
+      gemini        - Google Gemini
+      openai_compat - Any other OpenAI-compatible endpoint
+
+    Returns the model's reply as a string, or None on failure.
+    """
+    provider = cfg.get("LLM_PROVIDER", "ollama").lower()
+    messages  = _build_messages(prompt, user_identity, history)
 
     try:
         timeout = aiohttp.ClientTimeout(total=cfg["LLM_TIMEOUT"])
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload) as resp:
-                if resp.status != 200:
-                    print(f"❌ Ollama returned HTTP {resp.status}")
-                    return None
-                data = await resp.json()
-                return data.get("message", {}).get("content", "").strip()
+
+            if provider == "ollama":
+                return await _query_ollama(messages, session)
+
+            elif provider == "anthropic":
+                return await _query_anthropic(messages, session)
+
+            elif provider == "gemini":
+                return await _query_gemini(messages, session)
+
+            elif provider in ("openai", "lmstudio", "groq", "openrouter", "openai_compat"):
+                return await _query_openai_compat(
+                    messages, session,
+                    base_url=cfg["LLM_BASE_URL"],
+                    api_key=cfg.get("LLM_API_KEY", ""),
+                )
+
+            else:
+                print(f"❌ Unknown LLM_PROVIDER '{provider}'. "
+                      "Choose: ollama, openai, anthropic, lmstudio, groq, openrouter, gemini, openai_compat")
+                return None
+
     except asyncio.TimeoutError:
         print(f"❌ LLM request timed out after {cfg['LLM_TIMEOUT']}s")
         return None
-    except aiohttp.ClientConnectorError:
-        print(f"❌ Cannot connect to Ollama at {cfg['LLM_BASE_URL']} — is it running?")
+    except aiohttp.ClientConnectorError as e:
+        print(f"❌ Cannot connect to LLM at {cfg['LLM_BASE_URL']} - is it running? ({e})")
         return None
     except Exception as e:
-        print(f"❌ LLM error: {e}")
+        print(f"❌ LLM error ({provider}): {e}")
         return None
 
 
@@ -584,7 +758,7 @@ async def on_ready():
     print(f"✅ {bot.user} is online!")
     print(f"   Default msgs : {len(msgs.default)}")
     print(f"   Mention msgs : {len(msgs.mention)}")
-    print(f"   LLM          : {'✅ ' + cfg['LLM_MODEL'] + ' @ ' + cfg['LLM_BASE_URL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
+    print(f"   LLM          : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] + ' @ ' + cfg['LLM_BASE_URL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
     print(f"   Memory size  : {cfg['LLM_MEMORY_SIZE']} exchanges per user/channel")
     print(f"   Logging      : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
     try:
@@ -632,7 +806,7 @@ async def on_message(message: discord.Message):
         is_mentioned = bot.user.mentioned_in(message)
 
         # Discord auto-inserts a @mention when replying to someone, so we must
-        # check for a reply-to-bot FIRST — that takes priority over treating it
+        # check for a reply-to-bot FIRST - that takes priority over treating it
         # as a fresh mention, even when the mention flag is set.
         reply_key = resolve_user_from_reply(message)
         is_reply_to_bot = reply_key is not None
@@ -660,7 +834,7 @@ async def on_message(message: discord.Message):
                         clear_history(*history_key)
                         log("debug", f"[MEMORY] Cleared history for {user_identity} (fresh mention)")
 
-                    # Check LLM percentage gate — send a random mention_msg on skip
+                    # Check LLM percentage gate - send a random mention_msg on skip
                     if cfg["LLM_PERCENTAGE"] and random.randint(1, 100) > cfg["LLM_PERCENTAGE_VALUE"]:
                         log("debug", f"[LLM] Skipped (percentage gate) for {user_identity}")
                         if msgs.mention:
@@ -675,7 +849,7 @@ async def on_message(message: discord.Message):
 
                     await handle_llm_mention(message, mention_text, user_identity, history_key)
                 else:
-                    # Non-LLM path — fall back to random mention message
+                    # Non-LLM path - fall back to random mention message
                     if msgs.mention:
                         fallback = random.choice(msgs.mention)
                         try:
@@ -821,7 +995,7 @@ async def suggest_msg(interaction: discord.Interaction, message: str):
 async def reload_msgs(interaction: discord.Interaction):
     msgs.load()
     await interaction.response.send_message(
-        f"✅ Reloaded — Default: {len(msgs.default)}, Mention: {len(msgs.mention)}",
+        f"✅ Reloaded - Default: {len(msgs.default)}, Mention: {len(msgs.mention)}",
         ephemeral=True,
     )
 
@@ -837,33 +1011,128 @@ async def clear_memory(interaction: discord.Interaction):
 @bot.tree.command(name="llm-status", description="Check LLM connection status (admin only)")
 @app_commands.default_permissions(administrator=True)
 async def llm_status(interaction: discord.Interaction):
-    """Ping Ollama and report status."""
+    """Ping the configured LLM provider and report status."""
     if not cfg["ENABLE_LLM"]:
         await interaction.response.send_message("❌ LLM is disabled in config.", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
+    provider = cfg.get("LLM_PROVIDER", "ollama").lower()
+    base_url = cfg["LLM_BASE_URL"]
+    model    = cfg["LLM_MODEL"]
+    api_key  = cfg.get("LLM_API_KEY", "")
+    key_hint = f"`...{api_key[-4:]}`" if len(api_key) >= 4 else ("*(none)*" if not api_key else "`set`")
+
     try:
-        timeout = aiohttp.ClientTimeout(total=5)
+        timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(f"{cfg['LLM_BASE_URL']}/api/tags") as resp:
-                if resp.status == 200:
-                    data = await resp.json()
+
+            # ── Ollama: list installed models ──────────────────────────────
+            if provider == "ollama":
+                async with session.get(f"{base_url}/api/tags") as resp:
+                    if resp.status != 200:
+                        await interaction.followup.send(f"⚠️ Ollama responded with HTTP {resp.status}", ephemeral=True)
+                        return
+                    data   = await resp.json()
                     models = [m["name"] for m in data.get("models", [])]
-                    model_list = ", ".join(models) if models else "none"
-                    current = cfg["LLM_MODEL"]
-                    is_available = any(current in m for m in models)
-                    status = "✅" if is_available else "⚠️ model not found"
+                    model_list  = ", ".join(models) if models else "none"
+                    is_available = any(model in m for m in models)
+                    status = "✅ found" if is_available else "⚠️ not found in list"
                     await interaction.followup.send(
-                        f"**Ollama status:** ✅ Connected\n"
-                        f"**Active model:** `{current}` {status}\n"
+                        f"**Provider:** Ollama ✅ Connected\n"
+                        f"**Active model:** `{model}` - {status}\n"
                         f"**Installed models:** `{model_list}`",
                         ephemeral=True,
                     )
-                else:
-                    await interaction.followup.send(f"⚠️ Ollama responded with HTTP {resp.status}", ephemeral=True)
+
+            # ── OpenAI / LM Studio / Groq / OpenRouter / openai_compat: list models ──
+            elif provider in ("openai", "lmstudio", "groq", "openrouter", "openai_compat"):
+                headers = {}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                url = f"{base_url.rstrip('/')}/v1/models"
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        await interaction.followup.send(
+                            f"⚠️ {provider.upper()} responded with HTTP {resp.status}\n"
+                            f"`{await resp.text()[:300]}`",
+                            ephemeral=True,
+                        )
+                        return
+                    data = await resp.json()
+                    model_ids = [m.get("id", "?") for m in data.get("data", [])]
+                    model_list = ", ".join(model_ids[:15]) + ("…" if len(model_ids) > 15 else "")
+                    is_available = any(model in mid for mid in model_ids)
+                    status = "✅ found" if is_available else "⚠️ not in list"
+                    await interaction.followup.send(
+                        f"**Provider:** {provider.upper()} ✅ Connected\n"
+                        f"**Base URL:** `{base_url}`\n"
+                        f"**Active model:** `{model}` - {status}\n"
+                        f"**API key:** {key_hint}\n"
+                        f"**Available models (sample):** `{model_list or 'none returned'}`",
+                        ephemeral=True,
+                    )
+
+            # ── Anthropic: send a tiny test message ────────────────────────
+            elif provider == "anthropic":
+                url = f"{base_url.rstrip('/')}/v1/messages"
+                headers = {
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": model,
+                    "max_tokens": 8,
+                    "messages": [{"role": "user", "content": "ping"}],
+                }
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status == 200:
+                        await interaction.followup.send(
+                            f"**Provider:** Anthropic ✅ Connected\n"
+                            f"**Model:** `{model}`\n"
+                            f"**API key:** {key_hint}",
+                            ephemeral=True,
+                        )
+                    else:
+                        await interaction.followup.send(
+                            f"⚠️ Anthropic HTTP {resp.status}: `{await resp.text()[:300]}`",
+                            ephemeral=True,
+                        )
+
+            # ── Gemini: list models ────────────────────────────────────────
+            elif provider == "gemini":
+                url = f"{base_url.rstrip('/')}/v1beta/models?key={api_key}"
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        model_ids = [m.get("name", "?").split("/")[-1] for m in data.get("models", [])]
+                        model_list = ", ".join(model_ids[:15]) + ("…" if len(model_ids) > 15 else "")
+                        is_available = any(model in mid for mid in model_ids)
+                        status = "✅ found" if is_available else "⚠️ not in list"
+                        await interaction.followup.send(
+                            f"**Provider:** Gemini ✅ Connected\n"
+                            f"**Active model:** `{model}` - {status}\n"
+                            f"**API key:** {key_hint}\n"
+                            f"**Available models (sample):** `{model_list or 'none returned'}`",
+                            ephemeral=True,
+                        )
+                    else:
+                        await interaction.followup.send(
+                            f"⚠️ Gemini HTTP {resp.status}: `{await resp.text()[:300]}`",
+                            ephemeral=True,
+                        )
+
+            else:
+                await interaction.followup.send(
+                    f"❓ Unknown provider `{provider}` - cannot test connection.",
+                    ephemeral=True,
+                )
+
+    except aiohttp.ClientConnectorError as e:
+        await interaction.followup.send(f"❌ Cannot reach `{base_url}`: `{e}`", ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"❌ Cannot reach Ollama: `{e}`", ephemeral=True)
+        await interaction.followup.send(f"❌ Status check failed: `{e}`", ephemeral=True)
 
 
 # ============================================================
@@ -913,7 +1182,7 @@ if __name__ == "__main__":
     print(f"   Chicken out          : {'✅' if cfg['ENABLE_CHICKEN_OUT'] else '❌'}")
     print(f"   Suggestions          : {'✅' if cfg['ENABLE_SUGGESTIONS'] else '❌'}")
     print(f"   Rape command         : {'✅' if cfg['ENABLE_RAPE_COMMAND'] else '❌'}")
-    print(f"   LLM                  : {'✅ ' + cfg['LLM_MODEL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
+    print(f"   LLM                  : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
     print(f"   Memory size          : {cfg['LLM_MEMORY_SIZE']} exchanges per user/channel")
     print(f"   Logging              : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
     if cfg["ENABLE_LLM"]:
@@ -925,7 +1194,7 @@ if __name__ == "__main__":
     try:
         bot.run(cfg["TOKEN"])
     except discord.LoginFailure:
-        print("❌ Login failed — check your TOKEN in config.txt.")
+        print("❌ Login failed - check your TOKEN in config.txt.")
     except KeyboardInterrupt:
         print("\n👋 Bot stopped.")
     except Exception as e:

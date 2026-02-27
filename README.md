@@ -26,6 +26,7 @@
    - [6.5 Auto-Thread Channel](#65-auto-thread-channel)
    - [6.6 Chicken Out Detection](#66-chicken-out-detection)
    - [6.7 !hbm Command](#67-hbm-command)
+   - [6.8 LLM Responses](#68-llm-responses)
 7. [Commands Reference](#7-commands-reference)
 8. [Folder Structure](#8-folder-structure)
 9. [Troubleshooting](#9-troubleshooting)
@@ -47,6 +48,7 @@ Its core purpose is to add personality to a Discord server: it fires off random 
 | Auto-Thread | Auto-creates a thread and adds reactions to posts in a channel | `ENABLE_AUTO_THREAD` |
 | Chicken Out | Detects members who leave shortly after joining and posts a gif | `ENABLE_CHICKEN_OUT` |
 | !hbm | Sends `misc/hbm.png` to the current channel | *(prefix command)* |
+| **LLM Responses** | Bot can reply with AI‑generated text when mentioned with a prompt | `ENABLE_LLM` |
 
 ---
 
@@ -167,6 +169,40 @@ All toggles accept `true` or `false`.
 | `ENABLE_CHICKEN_OUT` | `true` |
 | `ENABLE_SUGGESTIONS` | `true` |
 | `ENABLE_RAPE_COMMAND` | `false` |
+| `ENABLE_LLM` | `false` |
+
+---
+
+### LLM Configuration
+
+Additional keys control AI behaviour when `ENABLE_LLM` is enabled:
+
+| Key | Description |
+|---|---|
+| `LLM_PROVIDER` | Which provider to use (`ollama`, `openai`, `anthropic`, `lmstudio`, `groq`, `openrouter`, `gemini`, `openai_compat`). |
+| `LLM_API_KEY` | API key for cloud providers. Leave blank for local servers. |
+| `LLM_BASE_URL` | Override the default endpoint URL. |
+| `LLM_MODEL` | Model name (e.g. `mistral`, `gpt-4o`, `claude-3-5-sonnet-20241022`). |
+| `LLM_SYSTEM_PROMPT` | System prompt defining the bot's personality. |
+| `LLM_MAX_TOKENS` | Max tokens per response. |
+| `LLM_TIMEOUT` | Seconds to wait for a reply. |
+| `LLM_FALLBACK_ON_ERROR` | Use a random mention message if the LLM call fails. |
+| `LLM_FALLBACK_MSG` | Custom fallback text (overrides random message). |
+| `LLM_TYPING_INDICATOR` | Show typing indicator while waiting. |
+| `LLM_PERCENTAGE` | Only respond some of the time when enabled. |
+| `LLM_PERCENTAGE_VALUE` | Chance (0‑100) to answer when `LLM_PERCENTAGE=true`. |
+| `LLM_MEMORY_SIZE` | Number of past user/bot exchanges to remember per channel. |
+
+### Logging Configuration
+
+The bot can log conversations and errors to disk. Set these values if `ENABLE_LOGGING` is `true`.
+
+| Key | Description |
+|---|---|
+| `ENABLE_LOGGING` | `true` to enable file logging. |
+| `LOG_DIR` | Directory for log files (relative to bot script). |
+| `LOG_FILE` | Filename for the main chat log. |
+
 
 ---
 
@@ -279,6 +315,27 @@ The `misc/` folder must be in the same directory as `bot.py`. If the file is mis
 
 ---
 
+### 6.8 LLM Responses
+
+If `ENABLE_LLM=true`, the bot can answer with AI‑generated text when mentioned with extra content. For example:
+
+```
+@Bruh tell me a joke about ducks
+```
+
+The text after the mention is sent to the configured LLM provider (Ollama, OpenAI, Anthropic, etc.) along with a system prompt that defines Bruh’s personality. The response is posted back into the same channel.
+
+Key behaviors:
+
+- If the mention contains *no* additional text the bot falls back to a random line from `mention_msgs.txt`.
+- You can enable `LLM_PERCENTAGE` to make the bot only answer some of the time.
+- Failures/timeouts either emit an error or, if `LLM_FALLBACK_ON_ERROR=true`, a random mention message or custom `LLM_FALLBACK_MSG`.
+- Conversation history is remembered per user/channel; use `/clear-memory` to wipe it.
+
+> **⚠️** LLM integration requires network access to the provider and may incur usage costs. Test with `/llm-status` and watch the logs in `logs/` if enabled.
+
+---
+
 ## 7. Commands Reference
 
 ### Slash Commands
@@ -287,6 +344,8 @@ The `misc/` folder must be in the same directory as `bot.py`. If the file is mis
 |---|---|---|
 | `/suggest-msg` | Everyone | Submit a new message suggestion. |
 | `/reload-msgs` | Administrator | Reload both message files from disk. |
+| `/clear-memory` | Everyone | Wipe your personal LLM conversation history. |
+| `/llm-status` | Administrator | Check connectivity with the configured LLM provider. |
 
 ### Context Menu Commands *(right-click → Apps)*
 
@@ -312,6 +371,7 @@ default_msgs.txt        ← default random response messages
 mention_msgs.txt        ← mention response messages
 misc/
 └── hbm.png             ← image used by !hbm command
+logs/                   ← conversation and error logs (if enabled)
 ```
 
 ---
@@ -327,4 +387,6 @@ misc/
 | Bot responds to its own messages | Should not happen - the `on_message` guard returns early for `bot.user`. Check for other bots forwarding messages. |
 | Chicken out fires on restart | By design - the in-memory join log is cleared on restart. Pre-restart members are not tracked. |
 | !hbm returns "file not found" | Create the `misc/` folder next to `bot.py` and put `hbm.png` inside it. |
+| LLM messages not working | Verify `ENABLE_LLM`, provider settings, and that the service is reachable (`/llm-status`). Check network/firewall. |
+| Your conversation feels broken | Use `/clear-memory` to reset your LLM history for the channel. |
 | Message not added after approval | The message may already be in the file. The button warns but will not duplicate. |

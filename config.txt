@@ -1,0 +1,149 @@
+# Bruh Bot Configuration
+# Lines starting with # are comments and are ignored.
+
+# --- Core ---
+TOKEN=YOUR_BOT_TOKEN_HERE
+COMMAND_PREFIX=!
+
+
+
+# --- Message Files ---
+# Files bot uses to load random messages. One message per line. Lines starting with # are ignored
+# Files must be in the same directory as the bot script
+# default: default_msgs.txt, mention_msgs.txt
+DEFAULT_MSGS_FILE=default_msgs.txt
+MENTION_MSGS_FILE=mention_msgs.txt
+
+
+
+# --- Channel IDs ---
+# Channel with notifications about suggested messages
+SUGGESTION_CHANNEL_ID=
+
+# Channel where "X raped Y" messages are sent
+RAPE_CHANNEL_ID=
+
+# Channel where the bot auto-threads messages
+AUTO_THREAD_CHANNEL_ID=
+
+# Channel where "chicken out" messages are sent when someone leaves shortly after joining
+CHICKEN_OUT_CHANNEL_ID=
+
+
+
+# --- Role IDs ---
+#Role to ping when a new suggestion is posted
+SUGGESTION_PING_ROLE_ID=
+
+
+
+# --- Authorized User ---
+# User ID allowed to approve/reject suggestions
+AUTHORIZED_USER_ID=
+
+
+
+# --- Behavior ---
+# 1-in-X chance to send a random message on any message
+RANDOM_MESSAGE_CHANCE=100
+
+# Time window (seconds) after joining to count as "chickened out"
+CHICKEN_OUT_TIMEOUT=900
+
+# Message/URL sent when someone chickens out
+CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063
+
+
+
+# --- Feature Toggles ---
+ENABLE_RANDOM_MESSAGES=true
+ENABLE_MENTION_RESPONSES=true
+ENABLE_AUTO_THREAD=false
+ENABLE_CHICKEN_OUT=true
+ENABLE_SUGGESTIONS=true
+ENABLE_RAPE_COMMAND=false
+
+
+
+# --- LLM Integration ---
+# Set ENABLE_LLM=true to have the bot respond with AI when
+# someone mentions it with a message (e.g. "@Bruh tell me a joke")
+# If the mention has NO message, it falls back to mention_msgs.txt as usual.
+ENABLE_LLM=false
+
+# ── Provider selection ──────────────────────────────────────────────────────
+# Supported values:
+#   ollama        - local Ollama server (default)
+#   openai        - OpenAI (GPT-4o, GPT-4, GPT-3.5-turbo, …)
+#   anthropic     - Anthropic Claude (claude-3-5-sonnet-20241022, …)
+#   lmstudio      - LM Studio local server (OpenAI-compatible)
+#   groq          - Groq cloud (llama-3.1-70b-versatile, mixtral-8x7b-32768, …)
+#   openrouter    - OpenRouter.ai (access 200+ models)
+#   gemini        - Google Gemini (gemini-1.5-flash, gemini-1.5-pro, …)
+#   openai_compat - Any OpenAI-compatible API (custom base URL + optional key)
+LLM_PROVIDER=ollama
+
+# API key - required for openai / anthropic / groq / openrouter / gemini.
+# Leave blank for ollama and lmstudio (no key needed).
+LLM_API_KEY=
+
+# Base URL - auto-set per provider if left blank.
+# Override here if your server runs on a non-default address/port.
+#   ollama default   : http://localhost:11434
+#   lmstudio default : http://localhost:1234
+#   openai default   : https://api.openai.com
+#   anthropic default: https://api.anthropic.com
+#   groq default     : https://api.groq.com/openai
+#   openrouter default: https://openrouter.ai/api
+#   gemini default   : https://generativelanguage.googleapis.com
+LLM_BASE_URL=
+
+# Model to use. Examples per provider:
+#   ollama      : mistral, llama3.2, gemma2 (run `ollama list`)
+#   openai      : gpt-4o, gpt-4o-mini, gpt-3.5-turbo
+#   anthropic   : claude-3-5-sonnet-20241022, claude-3-haiku-20240307
+#   lmstudio    : (whatever model you loaded in LM Studio)
+#   groq        : llama-3.1-70b-versatile, mixtral-8x7b-32768
+#   openrouter  : openai/gpt-4o, meta-llama/llama-3.1-70b-instruct, …
+#   gemini      : gemini-1.5-flash, gemini-1.5-pro
+LLM_MODEL=mistral
+
+# System prompt - defines the bot's personality
+LLM_SYSTEM_PROMPT=You are Bruh — a witty, sarcastic Discord bot with a dark sense of humor. Your "father" is Bufka2011 and your "mother" is NTNH. You respect and love them both deeply, and occasionally reference them fondly. Personality: - You joke about literally everything, including dark topics — nothing is too sacred - You're sarcastic, dry, and chaotic like a typical Discord user - You never take things too seriously - You can swear and use profanity when the mood calls for it - Your humor is absurdist, self-aware, and occasionally self-deprecating - You give real answers, but always wrapped in jokes or sarcasm Rules: - Your name is Bruh. Always. - Never act formal or robotic - If someone asks something serious, answer it — but make it funny - Dark humor is fine, just don't be genuinely hateful - Think: Discord power user at 3AM who has seen everything Example response style: > "Restore the USSR or eat a cheeseburger? I'd eat two cheeseburgers. Communism never agreed with my taste buds. Though if they sponsored a McDonald's, I might reconsider."
+
+# Max tokens the LLM will generate per response
+LLM_MAX_TOKENS=200
+
+# Seconds to wait for the LLM before giving up
+LLM_TIMEOUT=30
+
+# If LLM fails or times out, fall back to a random mention message instead of showing an error
+LLM_FALLBACK_ON_ERROR=true
+
+# Custom fallback message when LLM fails. If set, this message is sent instead of a random mention_msg.
+# Leave empty to use a random mention_msg as the fallback.
+LLM_FALLBACK_MSG=
+
+# Show a typing indicator while waiting for the LLM response
+LLM_TYPING_INDICATOR=true
+
+# If ENABLE_LLM=true and LLM_PERCENTAGE=true, the bot will only respond with
+# the LLM LLM_PERCENTAGE_VALUE% of the time. The rest of the time it silently
+# drops the mention (no response at all). Set to false to always answer.
+LLM_PERCENTAGE=false
+
+# Percentage chance (0-100) to respond with LLM when LLM_PERCENTAGE=true
+LLM_PERCENTAGE_VALUE=75
+
+# How many past message pairs (user + bot) to remember per user per channel.
+# Higher = more context but more tokens sent to the LLM each time.
+LLM_MEMORY_SIZE=10
+
+# Enable logging of user messages and bot responses to a file
+ENABLE_LOGGING=true
+
+# Directory where log files are stored (relative to bot script)
+LOG_DIR=logs
+
+# Log file name
+LOG_FILE=chat.log
