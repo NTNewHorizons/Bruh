@@ -2,6 +2,8 @@
 
 > A single-file Discord bot for random responses and community interactions.
 
+![Average Bruh interaction](https://github.com/NTNewHorizons/Bruh/blob/536e5002c15ae7bec5d8a6024868e57d1cba1a4c/.github/docs/averageBruh.png?raw=true "Average Bruh interaction")
+
 | | |
 |---|---|
 | **Language** | Python 3.10+ |
