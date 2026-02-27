@@ -135,9 +135,22 @@ LLM_PERCENTAGE=false
 # Percentage chance (0-100) to respond with LLM when LLM_PERCENTAGE=true
 LLM_PERCENTAGE_VALUE=75
 
+# Conversation Memory
+# Dual-layer memory system:
+#   1. Channel Context: Last X messages in the channel (all users)
+#   2. User History: Last Y conversation exchanges with the user
+# When bot is mentioned, it sees both layers for richer context.
+
+# Enable channel-level context memory (last N messages from channel)
+CHANNEL_MEMORY_ENABLED=true
+
+# How many recent channel messages to remember as context for LLM
+# Higher = more context but higher token cost per request
+CHANNEL_MEMORY_SIZE=15
+
 # How many past message pairs (user + bot) to remember per user per channel.
 # Higher = more context but more tokens sent to the LLM each time.
-LLM_MEMORY_SIZE=10
+LLM_MEMORY_SIZE=5
 
 # Enable logging of user messages and bot responses to a file
 ENABLE_LOGGING=true

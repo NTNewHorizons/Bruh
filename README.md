@@ -193,7 +193,9 @@ Additional keys control AI behaviour when `ENABLE_LLM` is enabled:
 | `LLM_TYPING_INDICATOR` | Show typing indicator while waiting. |
 | `LLM_PERCENTAGE` | Only respond some of the time when enabled. |
 | `LLM_PERCENTAGE_VALUE` | Chance (0‑100) to answer when `LLM_PERCENTAGE=true`. |
-| `LLM_MEMORY_SIZE` | Number of past user/bot exchanges to remember per channel. |
+| `CHANNEL_MEMORY_ENABLED` | Enable channel-wide context memory (see dual-layer system below). Default: `true`. |
+| `CHANNEL_MEMORY_SIZE` | Number of recent channel messages to remember as context. Default: `15`. |
+| `LLM_MEMORY_SIZE` | Number of past user/bot conversation exchanges per user/channel. Default: `5`. |
 
 ### Logging Configuration
 
@@ -317,7 +319,7 @@ The `misc/` folder must be in the same directory as `bot.py`. If the file is mis
 
 ---
 
-### 6.8 LLM Responses
+### 6.8 LLM Responses and Dual-Layer Memory
 
 If `ENABLE_LLM=true`, the bot can answer with AI‑generated text when mentioned with extra content. For example:
 
@@ -325,14 +327,54 @@ If `ENABLE_LLM=true`, the bot can answer with AI‑generated text when mentioned
 @Bruh tell me a joke about ducks
 ```
 
-The text after the mention is sent to the configured LLM provider (Ollama, OpenAI, Anthropic, etc.) along with a system prompt that defines Bruh’s personality. The response is posted back into the same channel.
+The text after the mention is sent to the configured LLM provider (Ollama, OpenAI, Anthropic, etc.) along with a system prompt that defines Bruh's personality. The response is posted back into the same channel.
 
-Key behaviors:
+#### Dual-Layer Memory System
+
+The LLM system uses a **dual-layer memory** approach for richer, more natural conversations:
+
+**Layer 1: Channel Context** (`CHANNEL_MEMORY_ENABLED`, `CHANNEL_MEMORY_SIZE`)
+- Bot remembers the last **N recent messages** from the entire channel (all users)
+- Every message in the channel is automatically logged with timestamp and author
+- When you mention the bot, it includes this context in the system prompt
+- Example: If User A and User B discussed a topic, and then User A asks Bruh about it, Bruh understands the discussion context
+- This makes conversations feel natural and multi-user
+
+**Layer 2: User History** (`LLM_MEMORY_SIZE`)
+- Bot remembers the last **M conversation exchanges** with each individual user in each channel
+- Only direct interactions with the bot are stored
+- Separate from channel context — each user has their own history
+- Survives across different topics in the channel
+
+**Combined Result:** The bot sees *both* what's been happening in the channel *and* what you've previously discussed with it.
+
+#### Example
+
+```
+[14:30] @Alice: cool new anime this season?
+[14:32] @Bob: i'll check it out
+[14:35] @Alice: @Bruh explain the magic system
+```
+
+Bruh receives:
+1. **Channel context** → "Alice and Bob just talked about an anime"
+2. **User history** → "Alice previously asked me about anime recommendations"
+3. **Current prompt** → "Explain the magic system"
+
+Result: Natural, contextual response that understands what you're asking about.
+
+**Configuration tips:**
+- `CHANNEL_MEMORY_SIZE=0` disables channel context (pure per-user mode)
+- Higher channel memory = more context but more tokens per request
+- Users can reset their history anytime with `/clear-memory`
+
+#### Key Behaviors
 
 - If the mention contains *no* additional text the bot falls back to a random line from `mention_msgs.txt`.
 - You can enable `LLM_PERCENTAGE` to make the bot only answer some of the time.
 - Failures/timeouts either emit an error or, if `LLM_FALLBACK_ON_ERROR=true`, a random mention message or custom `LLM_FALLBACK_MSG`.
-- Conversation history is remembered per user/channel; use `/clear-memory` to wipe it.
+- Conversation history is remembered per user/channel; use `/clear-memory` to wipe your personal history.
+- Channel context is never stored to disk — it clears on bot restart.
 
 > **⚠️** LLM integration requires network access to the provider and may incur usage costs. Test with `/llm-status` and watch the logs in `logs/` if enabled.
 
