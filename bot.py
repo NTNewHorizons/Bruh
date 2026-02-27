@@ -160,22 +160,9 @@ LLM_PERCENTAGE=false
 # Percentage chance (0-100) to respond with LLM when LLM_PERCENTAGE=true
 LLM_PERCENTAGE_VALUE=75
 
-# Conversation Memory
-# Dual-layer memory system:
-#   1. Channel Context: Last X messages in the channel (all users)
-#   2. User History: Last Y conversation exchanges with the user
-# When bot is mentioned, it sees both layers for richer context.
-
-# Enable channel-level context memory (last N messages from channel)
-CHANNEL_MEMORY_ENABLED=true
-
-# How many recent channel messages to remember as context for LLM
-# Higher = more context but higher token cost per request
-CHANNEL_MEMORY_SIZE=15
-
 # How many past message pairs (user + bot) to remember per user per channel.
 # Higher = more context but more tokens sent to the LLM each time.
-LLM_MEMORY_SIZE=5
+LLM_MEMORY_SIZE=10
 
 # Enable logging of user messages and bot responses to a file
 ENABLE_LOGGING=true
@@ -205,13 +192,13 @@ def load_config() -> dict:
         "SUGGESTION_CHANNEL_ID", "RAPE_CHANNEL_ID", "AUTO_THREAD_CHANNEL_ID",
         "CHICKEN_OUT_CHANNEL_ID", "SUGGESTION_PING_ROLE_ID", "AUTHORIZED_USER_ID",
         "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT", "LLM_MAX_TOKENS", "LLM_TIMEOUT",
-        "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE", "CHANNEL_MEMORY_SIZE",
+        "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
         "ENABLE_CHICKEN_OUT", "ENABLE_SUGGESTIONS", "ENABLE_RAPE_COMMAND",
         "ENABLE_LLM", "LLM_FALLBACK_ON_ERROR", "LLM_TYPING_INDICATOR",
-        "LLM_PERCENTAGE", "ENABLE_LOGGING", "CHANNEL_MEMORY_ENABLED",
+        "LLM_PERCENTAGE", "ENABLE_LOGGING",
     }
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -279,9 +266,7 @@ def load_config() -> dict:
     config.setdefault("LLM_FALLBACK_MSG", "")
     config.setdefault("LLM_PERCENTAGE", False)
     config.setdefault("LLM_PERCENTAGE_VALUE", 75)
-    config.setdefault("LLM_MEMORY_SIZE", 5)
-    config.setdefault("CHANNEL_MEMORY_ENABLED", True)
-    config.setdefault("CHANNEL_MEMORY_SIZE", 15)
+    config.setdefault("LLM_MEMORY_SIZE", 10)
     config.setdefault("ENABLE_LOGGING", True)
     config.setdefault("LOG_DIR", "logs")
     config.setdefault("LOG_FILE", "chat.log")
@@ -295,9 +280,6 @@ def load_config() -> dict:
         print("❌ LLM_MEMORY_SIZE must be at least 1.")
         exit(1)
 
-    if config["CHANNEL_MEMORY_SIZE"] < 0:
-        print("❌ CHANNEL_MEMORY_SIZE must be at least 0.")
-        exit(1)
     return config
 
 
@@ -357,20 +339,10 @@ def log(level: str, text: str):
 # CONVERSATION MEMORY
 # ============================================================
 
-# DUAL-LAYER MEMORY SYSTEM:
-# Layer 1: User History - per-user conversation history
-# Layer 2: Channel Context - recent messages from the entire channel
-
 # Key: (channel_id, user_id) → deque of {"role": "user"/"assistant", "content": str}
 # Each user gets their own conversation history per channel.
 _conversation_history: dict[tuple[int, int], deque] = defaultdict(
     lambda: deque(maxlen=cfg["LLM_MEMORY_SIZE"] * 2)  # *2 because each exchange = 2 entries
-)
-
-# Key: channel_id → deque of {"author": str, "content": str, "timestamp": str}
-# Stores recent messages from the entire channel for context
-_channel_context: dict[int, deque] = defaultdict(
-    lambda: deque(maxlen=cfg["CHANNEL_MEMORY_SIZE"])
 )
 
 # Maps bot message_id → (channel_id, user_id) so replies to the bot continue the right history
@@ -382,22 +354,6 @@ def get_history(channel_id: int, user_id: int) -> list[dict]:
     return list(_conversation_history[(channel_id, user_id)])
 
 
-def get_channel_context(channel_id: int) -> list[dict]:
-    """Return recent channel messages as context."""
-    return list(_channel_context[channel_id])
-
-
-def add_to_channel_context(channel_id: int, author: str, content: str):
-    """Add a message to the channel's context history."""
-    if cfg.get("CHANNEL_MEMORY_ENABLED", True):
-        timestamp = datetime.now().strftime("%H:%M")
-        _channel_context[channel_id].append({
-            "author": author,
-            "content": content,
-            "timestamp": timestamp
-        })
-
-
 def push_to_history(channel_id: int, user_id: int, role: str, content: str):
     """Append a message to the user's conversation history."""
     _conversation_history[(channel_id, user_id)].append({"role": role, "content": content})
@@ -406,7 +362,6 @@ def push_to_history(channel_id: int, user_id: int, role: str, content: str):
 def clear_history(channel_id: int, user_id: int):
     """Wipe history for a user in a channel."""
     _conversation_history[(channel_id, user_id)].clear()
-
 
 
 def resolve_user_from_reply(message: discord.Message) -> tuple[int, int] | None:
@@ -501,17 +456,9 @@ def get_mention_text(message: discord.Message, bot_user: discord.ClientUser) -> 
 
 # ── LLM provider helpers ──────────────────────────────────────────────────
 
-def _build_messages(prompt: str, user_identity: str, history: list[dict], channel_context: list[dict] = None) -> list[dict]:
-    """Build the standard messages array with system + channel context + history + new user turn."""
+def _build_messages(prompt: str, user_identity: str, history: list[dict]) -> list[dict]:
+    """Build the standard messages array (system + history + new user turn)."""
     system_prompt = cfg["LLM_SYSTEM_PROMPT"] + f"\nThe user you are currently talking to is: {user_identity}"
-    
-    # Add channel context to system prompt if available
-    if channel_context and cfg.get("CHANNEL_MEMORY_ENABLED", True):
-        context_str = "\n\nRecent conversation in this channel:"
-        for msg in channel_context:
-            context_str += f"\n[{msg['timestamp']}] {msg['author']}: {msg['content']}"
-        system_prompt += context_str
-    
     msgs_out = [{"role": "system", "content": system_prompt}]
     msgs_out.extend(history)
     msgs_out.append({"role": "user", "content": prompt})
@@ -624,7 +571,7 @@ async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession) ->
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
-async def query_llm(prompt: str, user_identity: str, history: list[dict], channel_context: list[dict] = None) -> str | None:
+async def query_llm(prompt: str, user_identity: str, history: list[dict]) -> str | None:
     """
     Dispatch to the correct LLM provider based on LLM_PROVIDER config.
 
@@ -641,7 +588,7 @@ async def query_llm(prompt: str, user_identity: str, history: list[dict], channe
     Returns the model's reply as a string, or None on failure.
     """
     provider = cfg.get("LLM_PROVIDER", "ollama").lower()
-    messages  = _build_messages(prompt, user_identity, history, channel_context)
+    messages  = _build_messages(prompt, user_identity, history)
 
     try:
         timeout = aiohttp.ClientTimeout(total=cfg["LLM_TIMEOUT"])
@@ -829,10 +776,6 @@ async def on_message(message: discord.Message):
     user_identity = format_user_identity(message)
     channel_info = f"#{message.channel}" if hasattr(message.channel, 'name') else "DM"
 
-    # Add message to channel context (for LLM to understand conversation flow)
-    if message.channel.id != bot.user.id:  # Skip DMs
-        add_to_channel_context(message.channel.id, user_identity, message.content[:200])
-
     # --- Auto-thread channel ---
     if cfg["ENABLE_AUTO_THREAD"] and message.channel.id == cfg.get("AUTO_THREAD_CHANNEL_ID"):
         try:
@@ -925,19 +868,18 @@ async def handle_llm_mention(
     history_key: tuple[int, int],
 ):
     """
-    Call the LLM with conversation history and channel context, send its response,
+    Call the LLM with conversation history, send its response,
     update history, and track the bot reply for future continuations.
     """
     channel_id, user_id = history_key
     history = get_history(channel_id, user_id)
-    channel_context = get_channel_context(channel_id)
 
     try:
         if cfg["LLM_TYPING_INDICATOR"]:
             async with message.channel.typing():
-                response = await query_llm(prompt, user_identity, history, channel_context)
+                response = await query_llm(prompt, user_identity, history)
         else:
-            response = await query_llm(prompt, user_identity, history, channel_context)
+            response = await query_llm(prompt, user_identity, history)
 
         if response:
             if len(response) > 1990:
