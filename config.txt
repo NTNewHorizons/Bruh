@@ -135,9 +135,11 @@ LLM_PERCENTAGE=false
 # Percentage chance (0-100) to respond with LLM when LLM_PERCENTAGE=true
 LLM_PERCENTAGE_VALUE=75
 
-# How many past message pairs (user + bot) to remember per user per channel.
-# Higher = more context but more tokens sent to the LLM each time.
-LLM_MEMORY_SIZE=10
+# How many recent channel messages to fetch as context for the LLM.
+# These are real Discord messages from ALL users in the channel, giving the bot
+# awareness of the full group conversation. Higher = more context, more tokens.
+# Recommended: 15-30. Set to 0 to disable context fetching.
+LLM_CONTEXT_MESSAGES=20
 
 # Enable logging of user messages and bot responses to a file
 ENABLE_LOGGING=true

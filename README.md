@@ -50,15 +50,15 @@ Its core purpose is to add personality to a Discord server: it fires off random 
 | Auto-Thread | Auto-creates a thread and adds reactions to posts in a channel | `ENABLE_AUTO_THREAD` |
 | Chicken Out | Detects members who leave shortly after joining and posts a gif | `ENABLE_CHICKEN_OUT` |
 | !hbm | Sends `misc/hbm.png` to the current channel | *(prefix command)* |
-| **LLM Responses** | Bot can reply with AI‑generated text when mentioned with a prompt | `ENABLE_LLM` |
+| **LLM Responses** | Bot replies with AI-generated text when mentioned, with full group chat awareness | `ENABLE_LLM` |
 
 ---
 
 ## 2. Requirements
 
-- **Python 3.10 or later** - required for the `X | Y` type union syntax used throughout the code.
-- **discord.py 2.x** - the async Discord library.
-- **A Discord Bot Token** - from the [Discord Developer Portal](https://discord.com/developers/applications).
+- **Python 3.10 or later** — required for the `X | Y` type union syntax used throughout the code.
+- **discord.py 2.x** — the async Discord library.
+- **A Discord Bot Token** — from the [Discord Developer Portal](https://discord.com/developers/applications).
 - The bot needs the **MESSAGE CONTENT** and **SERVER MEMBERS** Privileged Gateway Intents enabled in the Developer Portal.
 
 > **⚠️ Important:** Privileged intents must be turned **ON** in the Developer Portal under **Bot → Privileged Gateway Intents**, otherwise the bot will fail to start.
@@ -80,7 +80,7 @@ pip install discord.py
 
 ### Generate config
 
-Run the bot once with no `config.txt` present - it will create a template and exit:
+Run the bot once with no `config.txt` present — it will create a template and exit:
 
 ```bash
 python bot.py
@@ -96,8 +96,8 @@ Output:
 
 Open `config.txt` and fill in at minimum:
 
-- `TOKEN` - your bot token.
-- `AUTHORIZED_USER_ID` - your Discord user ID (right-click your name → Copy User ID with Developer Mode on).
+- `TOKEN` — your bot token.
+- `AUTHORIZED_USER_ID` — your Discord user ID (right-click your name → Copy User ID with Developer Mode on).
 - Any channel/role IDs for the features you want to enable.
 
 ### Start the bot
@@ -182,7 +182,7 @@ Additional keys control AI behaviour when `ENABLE_LLM` is enabled:
 | Key | Description |
 |---|---|
 | `LLM_PROVIDER` | Which provider to use (`ollama`, `openai`, `anthropic`, `lmstudio`, `groq`, `openrouter`, `gemini`, `openai_compat`). |
-| `LLM_API_KEY` | API key for cloud providers. Leave blank for local servers. |
+| `LLM_API_KEY` | API key for cloud providers. Leave blank for ollama and lmstudio. |
 | `LLM_BASE_URL` | Override the default endpoint URL. |
 | `LLM_MODEL` | Model name (e.g. `mistral`, `gpt-4o`, `claude-3-5-sonnet-20241022`). |
 | `LLM_SYSTEM_PROMPT` | System prompt defining the bot's personality. |
@@ -192,19 +192,18 @@ Additional keys control AI behaviour when `ENABLE_LLM` is enabled:
 | `LLM_FALLBACK_MSG` | Custom fallback text (overrides random message). |
 | `LLM_TYPING_INDICATOR` | Show typing indicator while waiting. |
 | `LLM_PERCENTAGE` | Only respond some of the time when enabled. |
-| `LLM_PERCENTAGE_VALUE` | Chance (0‑100) to answer when `LLM_PERCENTAGE=true`. |
-| `LLM_MEMORY_SIZE` | Number of past user/bot exchanges to remember per channel. |
+| `LLM_PERCENTAGE_VALUE` | Chance (0–100) to answer when `LLM_PERCENTAGE=true`. |
+| `LLM_CONTEXT_MESSAGES` | How many recent channel messages to read as context. Default: `20`. |
+
+> **ℹ️ On memory:** The bot no longer keeps a private per-user history. Instead it reads the last `LLM_CONTEXT_MESSAGES` real Discord messages from the channel before every response. This means context survives bot restarts automatically and includes messages from all users in the chat, giving the bot full group-chat awareness. See [6.8 LLM Responses](#68-llm-responses) for details.
 
 ### Logging Configuration
-
-The bot can log conversations and errors to disk. Set these values if `ENABLE_LOGGING` is `true`.
 
 | Key | Description |
 |---|---|
 | `ENABLE_LOGGING` | `true` to enable file logging. |
-| `LOG_DIR` | Directory for log files (relative to bot script). |
-| `LOG_FILE` | Filename for the main chat log. |
-
+| `LOG_DIR` | Directory for log files (relative to bot script). Default: `logs` |
+| `LOG_FILE` | Filename for the main chat log. Default: `chat.log` |
 
 ---
 
@@ -212,8 +211,8 @@ The bot can log conversations and errors to disk. Set these values if `ENABLE_LO
 
 The bot reads two plain-text files at startup. If they do not exist they are created as empty files automatically.
 
-- `default_msgs.txt` - messages sent randomly to any channel.
-- `mention_msgs.txt` - messages sent when the bot is @mentioned.
+- `default_msgs.txt` — messages sent randomly to any channel.
+- `mention_msgs.txt` — messages sent when the bot is @mentioned (used as fallback when LLM is disabled or fails).
 
 ```
 # default_msgs.txt example
@@ -246,9 +245,9 @@ When `ENABLE_RANDOM_MESSAGES=true`, the bot rolls a random number between 1 and 
 
 ### 6.2 Mention Responses
 
-When `ENABLE_MENTION_RESPONSES=true`, any message that @mentions the bot triggers a response. The bot picks a random line from `mention_msgs.txt` and sends it.
+When `ENABLE_MENTION_RESPONSES=true`, any message that @mentions the bot triggers a response. If LLM is disabled, the bot picks a random line from `mention_msgs.txt`. If LLM is enabled, it generates an AI response using recent channel context (see [6.8](#68-llm-responses)).
 
-> If `mention_msgs.txt` is empty, no response is sent and no error is raised.
+> If `mention_msgs.txt` is empty and LLM is disabled, no response is sent and no error is raised.
 
 ---
 
@@ -319,22 +318,52 @@ The `misc/` folder must be in the same directory as `bot.py`. If the file is mis
 
 ### 6.8 LLM Responses
 
-If `ENABLE_LLM=true`, the bot can answer with AI‑generated text when mentioned with extra content. For example:
+If `ENABLE_LLM=true`, the bot replies with AI-generated text whenever it is @mentioned with a prompt or when someone replies directly to one of its messages:
 
 ```
 @Bruh tell me a joke about ducks
 ```
 
-The text after the mention is sent to the configured LLM provider (Ollama, OpenAI, Anthropic, etc.) along with a system prompt that defines Bruh’s personality. The response is posted back into the same channel.
+#### How Memory Works
 
-Key behaviors:
+The bot does **not** maintain a private per-user conversation history. Instead, every time it is triggered, it fetches the last `LLM_CONTEXT_MESSAGES` real messages from the channel and passes them to the LLM as context. This design has several advantages:
 
-- If the mention contains *no* additional text the bot falls back to a random line from `mention_msgs.txt`.
-- You can enable `LLM_PERCENTAGE` to make the bot only answer some of the time.
-- Failures/timeouts either emit an error or, if `LLM_FALLBACK_ON_ERROR=true`, a random mention message or custom `LLM_FALLBACK_MSG`.
-- Conversation history is remembered per user/channel; use `/clear-memory` to wipe it.
+- **Survives restarts** — Discord stores the messages, not the bot. Rebooting the bot loses nothing.
+- **Full group-chat awareness** — the bot sees what everyone said, not just the person who pinged it. It can reference other users' messages naturally.
+- **No memory leaks** — there are no in-process dicts that grow forever.
+- **No `/clear-memory` needed** — context is always the live channel, so it's always fresh.
 
-> **⚠️** LLM integration requires network access to the provider and may incur usage costs. Test with `/llm-status` and watch the logs in `logs/` if enabled.
+Messages from other users are prefixed with `[Name]:` in the context, so the LLM knows who is speaking. Bot messages are passed as `assistant` turns.
+
+#### Example conversation in an active chat
+
+```
+Bufka:    @Bruh tell me a joke
+Bruh:     Why did the tomato blush? It saw the salad dressing. You're welcome.
+
+Terran:   @Bruh are u tuff?
+Bruh:     After watching Bufka get destroyed by a tomato joke? Absolutely. 😤
+
+Bufka:    @Bruh what did you just say to Terran?
+Bruh:     I said I was tuff. Which, given the tomato energy in here, is debatable.
+
+MasKazakh: @Bruh who asked you the joke?
+Bruh:     Bufka. Three messages ago. I've got eyes. 👀
+
+--- BOT RESTARTS ---
+
+Bufka:    @Bruh remember the joke from earlier?
+Bruh:     The tomato one? It's still in the chat, I can see it. Not Pulitzer material.
+```
+
+#### Other LLM behaviours
+
+- If the mention contains *no* text, the bot falls back to a random line from `mention_msgs.txt`.
+- Replying to a bot message works the same as a fresh @mention — the reply and surrounding channel context are both included.
+- Set `LLM_PERCENTAGE=true` and `LLM_PERCENTAGE_VALUE` to make the bot only respond some of the time.
+- If the LLM fails or times out and `LLM_FALLBACK_ON_ERROR=true`, a random mention message (or `LLM_FALLBACK_MSG` if set) is sent instead of an error.
+
+> **⚠️** LLM integration requires network access to the provider and may incur usage costs. Test connectivity with `/llm-status` and watch the logs in `logs/` if enabled.
 
 ---
 
@@ -346,7 +375,7 @@ Key behaviors:
 |---|---|---|
 | `/suggest-msg` | Everyone | Submit a new message suggestion. |
 | `/reload-msgs` | Administrator | Reload both message files from disk. |
-| `/clear-memory` | Everyone | Wipe your personal LLM conversation history. |
+| `/clear-memory` | Everyone | Explains that memory is now the live channel history. |
 | `/llm-status` | Administrator | Check connectivity with the configured LLM provider. |
 
 ### Context Menu Commands *(right-click → Apps)*
@@ -370,7 +399,7 @@ Key behaviors:
 bot.py                  ← main bot file (single file)
 config.txt              ← configuration (auto-generated on first run)
 default_msgs.txt        ← default random response messages
-mention_msgs.txt        ← mention response messages
+mention_msgs.txt        ← mention response messages (LLM fallback)
 misc/
 └── hbm.png             ← image used by !hbm command
 logs/                   ← conversation and error logs (if enabled)
@@ -386,9 +415,10 @@ logs/                   ← conversation and error logs (if enabled)
 | Slash commands not showing up | They can take up to an hour to propagate globally. Re-invite the bot or wait. |
 | Suggestions not posting | Ensure `SUGGESTION_CHANNEL_ID` and `SUGGESTION_PING_ROLE_ID` are set and the bot has Send Messages permission there. |
 | Auto-thread silently failing | The bot needs **Manage Threads** + **Add Reactions** in `AUTO_THREAD_CHANNEL_ID`. Check channel permission overrides. |
-| Bot responds to its own messages | Should not happen - the `on_message` guard returns early for `bot.user`. Check for other bots forwarding messages. |
-| Chicken out fires on restart | By design - the in-memory join log is cleared on restart. Pre-restart members are not tracked. |
+| Bot responds to its own messages | Should not happen — the `on_message` guard returns early for `bot.user`. Check for other bots forwarding messages. |
+| Chicken out fires on restart | By design — the in-memory join log is cleared on restart. Pre-restart members are not tracked. |
 | !hbm returns "file not found" | Create the `misc/` folder next to `bot.py` and put `hbm.png` inside it. |
 | LLM messages not working | Verify `ENABLE_LLM`, provider settings, and that the service is reachable (`/llm-status`). Check network/firewall. |
-| Your conversation feels broken | Use `/clear-memory` to reset your LLM history for the channel. |
+| Bot seems unaware of past messages | Increase `LLM_CONTEXT_MESSAGES` in `config.txt`. The default is `20`. |
+| Bot responds to the wrong person | The LLM sees messages from all users in the context window. If the channel is very busy, increase `LLM_CONTEXT_MESSAGES` so the bot has more scroll-back to work from. |
 | Message not added after approval | The message may already be in the file. The button warns but will not duplicate. |

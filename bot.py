@@ -11,8 +11,6 @@ import re
 import aiohttp
 import asyncio
 import logging
-from collections import defaultdict, deque
-from datetime import datetime
 from discord.ext import commands
 from discord import app_commands
 
@@ -160,9 +158,11 @@ LLM_PERCENTAGE=false
 # Percentage chance (0-100) to respond with LLM when LLM_PERCENTAGE=true
 LLM_PERCENTAGE_VALUE=75
 
-# How many past message pairs (user + bot) to remember per user per channel.
-# Higher = more context but more tokens sent to the LLM each time.
-LLM_MEMORY_SIZE=10
+# How many recent channel messages to fetch as context for the LLM.
+# These are real Discord messages from ALL users in the channel, giving the bot
+# awareness of the full group conversation. Higher = more context, more tokens.
+# Recommended: 15-30. Set to 0 to disable context fetching.
+LLM_CONTEXT_MESSAGES=20
 
 # Enable logging of user messages and bot responses to a file
 ENABLE_LOGGING=true
@@ -192,7 +192,7 @@ def load_config() -> dict:
         "SUGGESTION_CHANNEL_ID", "RAPE_CHANNEL_ID", "AUTO_THREAD_CHANNEL_ID",
         "CHICKEN_OUT_CHANNEL_ID", "SUGGESTION_PING_ROLE_ID", "AUTHORIZED_USER_ID",
         "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT", "LLM_MAX_TOKENS", "LLM_TIMEOUT",
-        "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE",
+        "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE", "LLM_CONTEXT_MESSAGES",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
@@ -267,6 +267,7 @@ def load_config() -> dict:
     config.setdefault("LLM_PERCENTAGE", False)
     config.setdefault("LLM_PERCENTAGE_VALUE", 75)
     config.setdefault("LLM_MEMORY_SIZE", 10)
+    config.setdefault("LLM_CONTEXT_MESSAGES", 20)
     config.setdefault("ENABLE_LOGGING", True)
     config.setdefault("LOG_DIR", "logs")
     config.setdefault("LOG_FILE", "chat.log")
@@ -336,44 +337,51 @@ def log(level: str, text: str):
 
 
 # ============================================================
-# CONVERSATION MEMORY
+# CONVERSATION MEMORY  (Discord channel history = our memory)
 # ============================================================
+# Instead of maintaining in-process dicts that die on restart and only
+# track a single user, we fetch the last N real messages from the channel
+# each time the bot is mentioned.  Discord stores them permanently, every
+# user's messages are included, and there is nothing to leak.
 
-# Key: (channel_id, user_id) → deque of {"role": "user"/"assistant", "content": str}
-# Each user gets their own conversation history per channel.
-_conversation_history: dict[tuple[int, int], deque] = defaultdict(
-    lambda: deque(maxlen=cfg["LLM_MEMORY_SIZE"] * 2)  # *2 because each exchange = 2 entries
-)
-
-# Maps bot message_id → (channel_id, user_id) so replies to the bot continue the right history
-_bot_message_map: dict[int, tuple[int, int]] = {}
-
-
-def get_history(channel_id: int, user_id: int) -> list[dict]:
-    """Return the conversation history as a list for the given user/channel."""
-    return list(_conversation_history[(channel_id, user_id)])
-
-
-def push_to_history(channel_id: int, user_id: int, role: str, content: str):
-    """Append a message to the user's conversation history."""
-    _conversation_history[(channel_id, user_id)].append({"role": role, "content": content})
-
-
-def clear_history(channel_id: int, user_id: int):
-    """Wipe history for a user in a channel."""
-    _conversation_history[(channel_id, user_id)].clear()
-
-
-def resolve_user_from_reply(message: discord.Message) -> tuple[int, int] | None:
+async def fetch_channel_context(
+    channel: discord.TextChannel,
+    current_message: discord.Message,
+    bot_user: discord.ClientUser,
+    limit: int = 20,
+) -> list[dict]:
     """
-    If this message is a reply to a bot message we remember, return
-    (channel_id, user_id) of the original conversation thread to continue.
-    Returns None if not a tracked bot reply.
+    Fetch the last `limit` messages from the channel (excluding the current
+    one) and return them as a list of {role, content} dicts suitable for
+    passing directly to any LLM.
+
+    Bot messages  → role "assistant"
+    Everyone else → role "user", prefixed with [DisplayName] so the LLM
+                    knows who is talking in a multi-user chat.
     """
-    ref = message.reference
-    if ref and ref.message_id and ref.message_id in _bot_message_map:
-        return _bot_message_map[ref.message_id]
-    return None
+    if limit <= 0:
+        return []
+
+    raw: list[discord.Message] = []
+    async for msg in channel.history(limit=limit, before=current_message):
+        if msg.content:          # skip embeds-only / attachment-only messages
+            raw.append(msg)
+
+    raw.reverse()                # put oldest first
+
+    history: list[dict] = []
+    for msg in raw:
+        if msg.author == bot_user:
+            history.append({"role": "assistant", "content": msg.content})
+        else:
+            name = (getattr(msg.author, "nick", None)
+                    or getattr(msg.author, "global_name", None)
+                    or msg.author.display_name
+                    or msg.author.name)
+            history.append({"role": "user", "content": f"[{name}]: {msg.content}"})
+
+    return history
+
 
 
 # ============================================================
@@ -457,11 +465,21 @@ def get_mention_text(message: discord.Message, bot_user: discord.ClientUser) -> 
 # ── LLM provider helpers ──────────────────────────────────────────────────
 
 def _build_messages(prompt: str, user_identity: str, history: list[dict]) -> list[dict]:
-    """Build the standard messages array (system + history + new user turn)."""
-    system_prompt = cfg["LLM_SYSTEM_PROMPT"] + f"\nThe user you are currently talking to is: {user_identity}"
+    """
+    Build the standard messages array (system + channel history + new user turn).
+    `history` is the pre-fetched channel context from fetch_channel_context().
+    The current user's message is appended last so it is always answered.
+    """
+    system_prompt = (
+        cfg["LLM_SYSTEM_PROMPT"]
+        + f"\n\nYou are participating in a group Discord chat. Multiple people may talk to you."
+        + f"\nThe person currently addressing you is: {user_identity}"
+        + f"\nWhen you see messages prefixed with [Name]:, those are other members of the chat."
+        + f"\nBe aware of what others said and respond to the right person."
+    )
     msgs_out = [{"role": "system", "content": system_prompt}]
     msgs_out.extend(history)
-    msgs_out.append({"role": "user", "content": prompt})
+    msgs_out.append({"role": "user", "content": f"[{user_identity}]: {prompt}"})
     return msgs_out
 
 
@@ -759,7 +777,7 @@ async def on_ready():
     print(f"   Default msgs : {len(msgs.default)}")
     print(f"   Mention msgs : {len(msgs.mention)}")
     print(f"   LLM          : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] + ' @ ' + cfg['LLM_BASE_URL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
-    print(f"   Memory size  : {cfg['LLM_MEMORY_SIZE']} exchanges per user/channel")
+    print(f"   Context msgs : last {cfg['LLM_CONTEXT_MESSAGES']} channel messages per response")
     print(f"   Logging      : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
     try:
         await bot.tree.sync()
@@ -805,36 +823,26 @@ async def on_message(message: discord.Message):
     if cfg["ENABLE_MENTION_RESPONSES"]:
         is_mentioned = bot.user.mentioned_in(message)
 
-        # Discord auto-inserts a @mention when replying to someone, so we must
-        # check for a reply-to-bot FIRST - that takes priority over treating it
-        # as a fresh mention, even when the mention flag is set.
-        reply_key = resolve_user_from_reply(message)
-        is_reply_to_bot = reply_key is not None
+        # Detect a reply to one of the bot's own messages (works across restarts)
+        ref = message.reference
+        is_reply_to_bot = (
+            ref is not None
+            and isinstance(getattr(ref, "resolved", None), discord.Message)
+            and ref.resolved.author == bot.user
+        )
 
-        # A "fresh mention" is an explicit @Bruh that is NOT caused by a reply.
-        is_fresh_mention = is_mentioned and not is_reply_to_bot
-
-        if is_fresh_mention or is_reply_to_bot:
+        if is_mentioned or is_reply_to_bot:
             mention_text = get_mention_text(message, bot.user)
 
-            # For replies, the full message content is the prompt (mention stripped already)
-            if not mention_text and is_reply_to_bot:
+            # For a bare reply with no extra text, use the full message content
+            if not mention_text:
                 mention_text = message.content.strip()
 
             if mention_text:
-                log("info", f"[{'MENTION' if is_fresh_mention else 'REPLY'}] {channel_info} | {user_identity} said: {message.content!r}")
+                log("info", f"[{'REPLY' if is_reply_to_bot else 'MENTION'}] {channel_info} | {user_identity} said: {message.content!r}")
 
                 if cfg["ENABLE_LLM"]:
-                    if is_reply_to_bot:
-                        # Continue the existing conversation thread
-                        history_key = reply_key
-                    else:
-                        # Fresh @mention → wipe history and start a new conversation
-                        history_key = (message.channel.id, message.author.id)
-                        clear_history(*history_key)
-                        log("debug", f"[MEMORY] Cleared history for {user_identity} (fresh mention)")
-
-                    # Check LLM percentage gate - send a random mention_msg on skip
+                    # Percentage gate
                     if cfg["LLM_PERCENTAGE"] and random.randint(1, 100) > cfg["LLM_PERCENTAGE_VALUE"]:
                         log("debug", f"[LLM] Skipped (percentage gate) for {user_identity}")
                         if msgs.mention:
@@ -847,7 +855,7 @@ async def on_message(message: discord.Message):
                         await bot.process_commands(message)
                         return
 
-                    await handle_llm_mention(message, mention_text, user_identity, history_key)
+                    await handle_llm_mention(message, mention_text, user_identity)
                 else:
                     # Non-LLM path - fall back to random mention message
                     if msgs.mention:
@@ -865,14 +873,16 @@ async def handle_llm_mention(
     message: discord.Message,
     prompt: str,
     user_identity: str,
-    history_key: tuple[int, int],
 ):
     """
-    Call the LLM with conversation history, send its response,
-    update history, and track the bot reply for future continuations.
+    Fetch recent channel history, call the LLM, and send the response.
+    No in-process memory is maintained — Discord IS the memory.
     """
-    channel_id, user_id = history_key
-    history = get_history(channel_id, user_id)
+    # Fetch the live channel context (last N messages from everyone)
+    context_limit = cfg.get("LLM_CONTEXT_MESSAGES", 20)
+    history = await fetch_channel_context(
+        message.channel, message, bot.user, limit=context_limit
+    )
 
     try:
         if cfg["LLM_TYPING_INDICATOR"]:
@@ -885,15 +895,7 @@ async def handle_llm_mention(
             if len(response) > 1990:
                 response = response[:1990] + "…"
 
-            bot_msg = await message.reply(response, mention_author=False)
-
-            # Update conversation history
-            push_to_history(channel_id, user_id, "user", prompt)
-            push_to_history(channel_id, user_id, "assistant", response)
-
-            # Remember this bot message so replies to it continue the conversation
-            _bot_message_map[bot_msg.id] = (channel_id, user_id)
-
+            await message.reply(response, mention_author=False)
             log("info", f"[LLM-REPLY] BOT → {message.author} | {response!r}")
         else:
             raise ValueError("Empty response from LLM")
@@ -1000,12 +1002,15 @@ async def reload_msgs(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="clear-memory", description="Wipe your conversation memory with the bot")
+@bot.tree.command(name="clear-memory", description="Bot memory is now the live channel history — nothing to clear!")
 async def clear_memory(interaction: discord.Interaction):
-    """Let a user reset their own conversation history."""
-    clear_history(interaction.channel_id, interaction.user.id)
-    await interaction.response.send_message("🧹 Your conversation memory has been cleared!", ephemeral=True)
-    log("info", f"[MEMORY-CLEAR] {interaction.user} cleared history in #{interaction.channel}")
+    """Inform the user that memory is now Discord's channel history."""
+    await interaction.response.send_message(
+        "🧠 Memory is now the **live channel history** — I read the last "
+        f"{cfg.get('LLM_CONTEXT_MESSAGES', 20)} messages every time you ping me, "
+        "so there's nothing to clear. Just keep chatting!",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="llm-status", description="Check LLM connection status (admin only)")
@@ -1183,7 +1188,7 @@ if __name__ == "__main__":
     print(f"   Suggestions          : {'✅' if cfg['ENABLE_SUGGESTIONS'] else '❌'}")
     print(f"   Rape command         : {'✅' if cfg['ENABLE_RAPE_COMMAND'] else '❌'}")
     print(f"   LLM                  : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
-    print(f"   Memory size          : {cfg['LLM_MEMORY_SIZE']} exchanges per user/channel")
+    print(f"   Context messages     : last {cfg['LLM_CONTEXT_MESSAGES']} channel msgs per response")
     print(f"   Logging              : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
     if cfg["ENABLE_LLM"]:
         pct = cfg["LLM_PERCENTAGE"]
