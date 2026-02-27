@@ -96,7 +96,7 @@ ENABLE_RAPE_COMMAND=false
 # If the mention has NO message, it falls back to mention_msgs.txt as usual.
 ENABLE_LLM=false
 
-# ── Provider selection ──────────────────────────────────────────────────────
+# Provider selection
 # Supported values:
 #   ollama        - local Ollama server (default)
 #   openai        - OpenAI (GPT-4o, GPT-4, GPT-3.5-turbo, …)
