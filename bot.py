@@ -10,6 +10,9 @@ import traceback
 import re
 import aiohttp
 import asyncio
+import logging
+from collections import defaultdict, deque
+from datetime import datetime
 from discord.ext import commands
 from discord import app_commands
 
@@ -27,30 +30,55 @@ CONFIG_TEMPLATE = """# Bruh Bot Configuration
 TOKEN=YOUR_BOT_TOKEN_HERE
 COMMAND_PREFIX=!
 
+
+
 # --- Message Files ---
+# Files bot uses to load random messages. One message per line. Lines starting with # are ignored
+# Files must be in the same directory as the bot script
+# default: default_msgs.txt, mention_msgs.txt
 DEFAULT_MSGS_FILE=default_msgs.txt
 MENTION_MSGS_FILE=mention_msgs.txt
 
+
+
 # --- Channel IDs ---
+# Channel with notifications about suggested messages
 SUGGESTION_CHANNEL_ID=
+
+# Channel where "X raped Y" messages are sent
 RAPE_CHANNEL_ID=
+
+# Channel where the bot auto-threads messages
 AUTO_THREAD_CHANNEL_ID=
+
+# Channel where "chicken out" messages are sent when someone leaves shortly after joining
 CHICKEN_OUT_CHANNEL_ID=
 
+
+
 # --- Role IDs ---
+#Role to ping when a new suggestion is posted
 SUGGESTION_PING_ROLE_ID=
+
+
 
 # --- Authorized User ---
 # User ID allowed to approve/reject suggestions
 AUTHORIZED_USER_ID=
 
+
+
 # --- Behavior ---
 # 1-in-X chance to send a random message on any message
 RANDOM_MESSAGE_CHANCE=100
+
 # Time window (seconds) after joining to count as "chickened out"
 CHICKEN_OUT_TIMEOUT=900
+
 # Message/URL sent when someone chickens out
 CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063
+
+
 
 # --- Feature Toggles ---
 ENABLE_RANDOM_MESSAGES=true
@@ -60,9 +88,9 @@ ENABLE_CHICKEN_OUT=true
 ENABLE_SUGGESTIONS=true
 ENABLE_RAPE_COMMAND=false
 
-# -------------------------------------------------------
-# LLM Settings (via Ollama)
-# -------------------------------------------------------
+
+
+# --- LLM Integration ---
 # Set ENABLE_LLM=true to have the bot respond with AI when
 # someone mentions it with a message (e.g. "@Bruh tell me a joke")
 # If the mention has NO message, it falls back to mention_msgs.txt as usual.
@@ -86,8 +114,33 @@ LLM_TIMEOUT=30
 # If LLM fails or times out, fall back to a random mention message instead of showing an error
 LLM_FALLBACK_ON_ERROR=true
 
+# Custom fallback message when LLM fails. If set, this message is sent instead of a random mention_msg.
+# Leave empty to use a random mention_msg as the fallback.
+LLM_FALLBACK_MSG=
+
 # Show a typing indicator while waiting for the LLM response
 LLM_TYPING_INDICATOR=true
+
+# If ENABLE_LLM=true and LLM_PERCENTAGE=true, the bot will only respond with
+# the LLM LLM_PERCENTAGE_VALUE% of the time. The rest of the time it silently
+# drops the mention (no response at all). Set to false to always answer.
+LLM_PERCENTAGE=false
+
+# Percentage chance (0-100) to respond with LLM when LLM_PERCENTAGE=true
+LLM_PERCENTAGE_VALUE=75
+
+# How many past message pairs (user + bot) to remember per user per channel.
+# Higher = more context but more tokens sent to the LLM each time.
+LLM_MEMORY_SIZE=10
+
+# Enable logging of user messages and bot responses to a file
+ENABLE_LOGGING=true
+
+# Directory where log files are stored (relative to bot script)
+LOG_DIR=logs
+
+# Log file name
+LOG_FILE=chat.log
 """
 
 
@@ -108,11 +161,13 @@ def load_config() -> dict:
         "SUGGESTION_CHANNEL_ID", "RAPE_CHANNEL_ID", "AUTO_THREAD_CHANNEL_ID",
         "CHICKEN_OUT_CHANNEL_ID", "SUGGESTION_PING_ROLE_ID", "AUTHORIZED_USER_ID",
         "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT", "LLM_MAX_TOKENS", "LLM_TIMEOUT",
+        "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
         "ENABLE_CHICKEN_OUT", "ENABLE_SUGGESTIONS", "ENABLE_RAPE_COMMAND",
         "ENABLE_LLM", "LLM_FALLBACK_ON_ERROR", "LLM_TYPING_INDICATOR",
+        "LLM_PERCENTAGE", "ENABLE_LOGGING",
     }
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -162,11 +217,117 @@ def load_config() -> dict:
     config.setdefault("LLM_TIMEOUT", 30)
     config.setdefault("LLM_FALLBACK_ON_ERROR", True)
     config.setdefault("LLM_TYPING_INDICATOR", True)
+    config.setdefault("LLM_FALLBACK_MSG", "")
+    config.setdefault("LLM_PERCENTAGE", False)
+    config.setdefault("LLM_PERCENTAGE_VALUE", 75)
+    config.setdefault("LLM_MEMORY_SIZE", 10)
+    config.setdefault("ENABLE_LOGGING", True)
+    config.setdefault("LOG_DIR", "logs")
+    config.setdefault("LOG_FILE", "chat.log")
+
+    # Clamp percentage value
+    if not (0 <= config["LLM_PERCENTAGE_VALUE"] <= 100):
+        print("❌ LLM_PERCENTAGE_VALUE must be between 0 and 100.")
+        exit(1)
+
+    if config["LLM_MEMORY_SIZE"] < 1:
+        print("❌ LLM_MEMORY_SIZE must be at least 1.")
+        exit(1)
 
     return config
 
 
 cfg = load_config()
+
+
+# ============================================================
+# LOGGING SETUP
+# ============================================================
+
+def setup_logger() -> logging.Logger:
+    """Create a file+console logger for chat activity."""
+    log_dir = BOT_DIR / cfg["LOG_DIR"]
+    log_dir.mkdir(exist_ok=True)
+
+    log_path = log_dir / cfg["LOG_FILE"]
+
+    logger = logging.getLogger("bruh_bot")
+    logger.setLevel(logging.DEBUG)
+
+    # Avoid adding duplicate handlers on reload
+    if logger.handlers:
+        return logger
+
+    fmt = logging.Formatter(
+        fmt="[%(asctime)s] %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # File handler — always UTF-8
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+
+    # Console handler — INFO and above
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+
+    print(f"📝 Logging to {log_path}")
+    return logger
+
+
+chat_log = setup_logger() if cfg["ENABLE_LOGGING"] else None
+
+
+def log(level: str, text: str):
+    """Convenience wrapper — no-ops if logging is disabled."""
+    if chat_log is None:
+        return
+    getattr(chat_log, level, chat_log.info)(text)
+
+
+# ============================================================
+# CONVERSATION MEMORY
+# ============================================================
+
+# Key: (channel_id, user_id) → deque of {"role": "user"/"assistant", "content": str}
+# Each user gets their own conversation history per channel.
+_conversation_history: dict[tuple[int, int], deque] = defaultdict(
+    lambda: deque(maxlen=cfg["LLM_MEMORY_SIZE"] * 2)  # *2 because each exchange = 2 entries
+)
+
+# Maps bot message_id → (channel_id, user_id) so replies to the bot continue the right history
+_bot_message_map: dict[int, tuple[int, int]] = {}
+
+
+def get_history(channel_id: int, user_id: int) -> list[dict]:
+    """Return the conversation history as a list for the given user/channel."""
+    return list(_conversation_history[(channel_id, user_id)])
+
+
+def push_to_history(channel_id: int, user_id: int, role: str, content: str):
+    """Append a message to the user's conversation history."""
+    _conversation_history[(channel_id, user_id)].append({"role": role, "content": content})
+
+
+def clear_history(channel_id: int, user_id: int):
+    """Wipe history for a user in a channel."""
+    _conversation_history[(channel_id, user_id)].clear()
+
+
+def resolve_user_from_reply(message: discord.Message) -> tuple[int, int] | None:
+    """
+    If this message is a reply to a bot message we remember, return
+    (channel_id, user_id) of the original conversation thread to continue.
+    Returns None if not a tracked bot reply.
+    """
+    ref = message.reference
+    if ref and ref.message_id and ref.message_id in _bot_message_map:
+        return _bot_message_map[ref.message_id]
+    return None
 
 
 # ============================================================
@@ -214,22 +375,53 @@ msgs = MessageLists()
 
 
 # ============================================================
-# LLM CLIENT
+# USER IDENTITY HELPERS
 # ============================================================
+
+def format_user_identity(message: discord.Message) -> str:
+    author = message.author
+    parts: list[str] = []
+
+    username = author.name
+    server_nick = getattr(author, "nick", None)
+    display_name = getattr(author, "global_name", None) or author.display_name
+
+    parts.append(username)
+
+    if server_nick and server_nick != username:
+        parts.append(server_nick)
+
+    if display_name and display_name not in parts:
+        parts.append(display_name)
+
+    return " | ".join(parts)
+
 
 def get_mention_text(message: discord.Message, bot_user: discord.ClientUser) -> str:
     """Strip all @bot mentions from the message and return the remaining text."""
     content = message.content
-    # Remove <@BOT_ID> and <@!BOT_ID> patterns
     content = re.sub(rf"<@!?{bot_user.id}>", "", content).strip()
     return content
 
 
-async def query_llm(prompt: str) -> str | None:
+# ============================================================
+# LLM CLIENT
+# ============================================================
+
+async def query_llm(prompt: str, user_identity: str, history: list[dict]) -> str | None:
     """
-    Send a prompt to Ollama and return the response text.
+    Send a prompt to Ollama together with the conversation history and return the response.
+    history is a list of {"role": "user"/"assistant", "content": str} dicts.
     Returns None on failure.
     """
+    identity_note = f"\nThe user you are currently talking to is: {user_identity}"
+    system_prompt = cfg["LLM_SYSTEM_PROMPT"] + identity_note
+
+    # Build message list: system + history + new user message
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": prompt})
+
     url = f"{cfg['LLM_BASE_URL']}/api/chat"
     payload = {
         "model": cfg["LLM_MODEL"],
@@ -237,10 +429,7 @@ async def query_llm(prompt: str) -> str | None:
         "options": {
             "num_predict": cfg["LLM_MAX_TOKENS"],
         },
-        "messages": [
-            {"role": "system", "content": cfg["LLM_SYSTEM_PROMPT"]},
-            {"role": "user", "content": prompt},
-        ],
+        "messages": messages,
     }
 
     try:
@@ -396,6 +585,8 @@ async def on_ready():
     print(f"   Default msgs : {len(msgs.default)}")
     print(f"   Mention msgs : {len(msgs.mention)}")
     print(f"   LLM          : {'✅ ' + cfg['LLM_MODEL'] + ' @ ' + cfg['LLM_BASE_URL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
+    print(f"   Memory size  : {cfg['LLM_MEMORY_SIZE']} exchanges per user/channel")
+    print(f"   Logging      : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
     try:
         await bot.tree.sync()
         print("🔄 Slash commands synced.")
@@ -407,6 +598,9 @@ async def on_ready():
 async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
+
+    user_identity = format_user_identity(message)
+    channel_info = f"#{message.channel}" if hasattr(message.channel, 'name') else "DM"
 
     # --- Auto-thread channel ---
     if cfg["ENABLE_AUTO_THREAD"] and message.channel.id == cfg.get("AUTO_THREAD_CHANNEL_ID"):
@@ -427,58 +621,129 @@ async def on_message(message: discord.Message):
             and msgs.default
             and random.randint(1, cfg["RANDOM_MESSAGE_CHANCE"]) == 1):
         try:
-            await message.channel.send(random.choice(msgs.default))
+            random_msg = random.choice(msgs.default)
+            await message.channel.send(random_msg)
+            log("info", f"[RANDOM] {channel_info} | BOT → {random_msg!r}")
         except discord.Forbidden:
             pass
 
-    # --- Mention response ---
-    if cfg["ENABLE_MENTION_RESPONSES"] and bot.user.mentioned_in(message):
-        mention_text = get_mention_text(message, bot.user)
+    # --- Mention / reply response ---
+    if cfg["ENABLE_MENTION_RESPONSES"]:
+        is_mentioned = bot.user.mentioned_in(message)
 
-        # If there's actual message content AND LLM is enabled → use LLM
-        if mention_text and cfg["ENABLE_LLM"]:
-            await handle_llm_mention(message, mention_text)
+        # Discord auto-inserts a @mention when replying to someone, so we must
+        # check for a reply-to-bot FIRST — that takes priority over treating it
+        # as a fresh mention, even when the mention flag is set.
+        reply_key = resolve_user_from_reply(message)
+        is_reply_to_bot = reply_key is not None
 
-        # Otherwise fall back to mention_msgs list (bare ping, or LLM disabled)
-        elif msgs.mention:
-            try:
-                await message.channel.send(random.choice(msgs.mention))
-            except discord.Forbidden:
-                pass
+        # A "fresh mention" is an explicit @Bruh that is NOT caused by a reply.
+        is_fresh_mention = is_mentioned and not is_reply_to_bot
+
+        if is_fresh_mention or is_reply_to_bot:
+            mention_text = get_mention_text(message, bot.user)
+
+            # For replies, the full message content is the prompt (mention stripped already)
+            if not mention_text and is_reply_to_bot:
+                mention_text = message.content.strip()
+
+            if mention_text:
+                log("info", f"[{'MENTION' if is_fresh_mention else 'REPLY'}] {channel_info} | {user_identity} said: {message.content!r}")
+
+                if cfg["ENABLE_LLM"]:
+                    if is_reply_to_bot:
+                        # Continue the existing conversation thread
+                        history_key = reply_key
+                    else:
+                        # Fresh @mention → wipe history and start a new conversation
+                        history_key = (message.channel.id, message.author.id)
+                        clear_history(*history_key)
+                        log("debug", f"[MEMORY] Cleared history for {user_identity} (fresh mention)")
+
+                    # Check LLM percentage gate — send a random mention_msg on skip
+                    if cfg["LLM_PERCENTAGE"] and random.randint(1, 100) > cfg["LLM_PERCENTAGE_VALUE"]:
+                        log("debug", f"[LLM] Skipped (percentage gate) for {user_identity}")
+                        if msgs.mention:
+                            fallback = random.choice(msgs.mention)
+                            try:
+                                await message.channel.send(fallback)
+                                log("info", f"[LLM-PCT-SKIP] {channel_info} | BOT → {fallback!r}")
+                            except discord.Forbidden:
+                                pass
+                        await bot.process_commands(message)
+                        return
+
+                    await handle_llm_mention(message, mention_text, user_identity, history_key)
+                else:
+                    # Non-LLM path — fall back to random mention message
+                    if msgs.mention:
+                        fallback = random.choice(msgs.mention)
+                        try:
+                            await message.channel.send(fallback)
+                            log("info", f"[MENTION-REPLY] {channel_info} | BOT → {fallback!r}")
+                        except discord.Forbidden:
+                            pass
 
     await bot.process_commands(message)
 
 
-async def handle_llm_mention(message: discord.Message, prompt: str):
-    """Call the LLM and send its response. Falls back to mention_msgs on failure if configured."""
+async def handle_llm_mention(
+    message: discord.Message,
+    prompt: str,
+    user_identity: str,
+    history_key: tuple[int, int],
+):
+    """
+    Call the LLM with conversation history, send its response,
+    update history, and track the bot reply for future continuations.
+    """
+    channel_id, user_id = history_key
+    history = get_history(channel_id, user_id)
+
     try:
         if cfg["LLM_TYPING_INDICATOR"]:
             async with message.channel.typing():
-                response = await query_llm(prompt)
+                response = await query_llm(prompt, user_identity, history)
         else:
-            response = await query_llm(prompt)
+            response = await query_llm(prompt, user_identity, history)
 
         if response:
-            # Discord has a 2000 char limit — truncate just in case
             if len(response) > 1990:
                 response = response[:1990] + "…"
-            await message.channel.send(response)
+
+            bot_msg = await message.reply(response, mention_author=False)
+
+            # Update conversation history
+            push_to_history(channel_id, user_id, "user", prompt)
+            push_to_history(channel_id, user_id, "assistant", response)
+
+            # Remember this bot message so replies to it continue the conversation
+            _bot_message_map[bot_msg.id] = (channel_id, user_id)
+
+            log("info", f"[LLM-REPLY] BOT → {message.author} | {response!r}")
         else:
             raise ValueError("Empty response from LLM")
 
     except Exception as e:
         print(f"❌ LLM mention handler error: {e}")
-        if cfg["LLM_FALLBACK_ON_ERROR"] and msgs.mention:
-            try:
-                await message.channel.send(random.choice(msgs.mention))
-            except discord.Forbidden:
-                pass
+        log("warning", f"[LLM-ERROR] {user_identity} | {e}")
+        if cfg["LLM_FALLBACK_ON_ERROR"]:
+            fallback = cfg.get("LLM_FALLBACK_MSG", "").strip()
+            if not fallback and msgs.mention:
+                fallback = random.choice(msgs.mention)
+            if fallback:
+                try:
+                    await message.channel.send(fallback)
+                    log("info", f"[LLM-FALLBACK] BOT → {message.author} | {fallback!r}")
+                except discord.Forbidden:
+                    pass
 
 
 @bot.event
 async def on_member_join(member: discord.Member):
     if cfg["ENABLE_CHICKEN_OUT"]:
         recent_joins[member.id] = discord.utils.utcnow()
+    log("info", f"[JOIN] {member} ({member.id}) joined {member.guild}")
     print(f"👋 {member} joined.")
 
 
@@ -496,6 +761,7 @@ async def on_member_remove(member: discord.Member):
             try:
                 await channel.send(f"{member.mention} chickened out")
                 await channel.send(cfg["CHICKENED_OUT_MSG"])
+                log("info", f"[CHICKEN-OUT] {member} left after {int(elapsed)}s")
                 print(f"🐔 {member} chickened out after {int(elapsed)}s.")
             except discord.Forbidden:
                 print("❌ No permission in chicken-out channel.")
@@ -507,6 +773,7 @@ async def on_member_remove(member: discord.Member):
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     msg = f"❌ Command error: {error}"
     print(msg)
+    log("error", f"[CMD-ERROR] {interaction.user} | {error}")
     try:
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
@@ -557,6 +824,14 @@ async def reload_msgs(interaction: discord.Interaction):
         f"✅ Reloaded — Default: {len(msgs.default)}, Mention: {len(msgs.mention)}",
         ephemeral=True,
     )
+
+
+@bot.tree.command(name="clear-memory", description="Wipe your conversation memory with the bot")
+async def clear_memory(interaction: discord.Interaction):
+    """Let a user reset their own conversation history."""
+    clear_history(interaction.channel_id, interaction.user.id)
+    await interaction.response.send_message("🧹 Your conversation memory has been cleared!", ephemeral=True)
+    log("info", f"[MEMORY-CLEAR] {interaction.user} cleared history in #{interaction.channel}")
 
 
 @bot.tree.command(name="llm-status", description="Check LLM connection status (admin only)")
@@ -639,6 +914,13 @@ if __name__ == "__main__":
     print(f"   Suggestions          : {'✅' if cfg['ENABLE_SUGGESTIONS'] else '❌'}")
     print(f"   Rape command         : {'✅' if cfg['ENABLE_RAPE_COMMAND'] else '❌'}")
     print(f"   LLM                  : {'✅ ' + cfg['LLM_MODEL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
+    print(f"   Memory size          : {cfg['LLM_MEMORY_SIZE']} exchanges per user/channel")
+    print(f"   Logging              : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
+    if cfg["ENABLE_LLM"]:
+        pct = cfg["LLM_PERCENTAGE"]
+        print(f"   LLM percentage       : {'✅ ' + str(cfg['LLM_PERCENTAGE_VALUE']) + '%' if pct else '❌ always answer'}")
+        fallback_msg = cfg.get("LLM_FALLBACK_MSG", "").strip()
+        print(f"   LLM fallback msg     : {'✅ custom' if fallback_msg else 'ℹ️  random mention_msg'}")
 
     try:
         bot.run(cfg["TOKEN"])
