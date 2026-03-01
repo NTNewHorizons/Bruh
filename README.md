@@ -245,9 +245,16 @@ When `ENABLE_RANDOM_MESSAGES=true`, the bot rolls a random number between 1 and 
 
 ### 6.2 Mention Responses
 
-When `ENABLE_MENTION_RESPONSES=true`, any message that @mentions the bot triggers a response. If LLM is disabled, the bot picks a random line from `mention_msgs.txt`. If LLM is enabled, it generates an AI response using recent channel context (see [6.8](#68-llm-responses)).
+When `ENABLE_MENTION_RESPONSES=true`, the bot responds **only when explicitly @pinged**. Silent replies (replying to a bot message without a @mention) are ignored.
 
-> If `mention_msgs.txt` is empty and LLM is disabled, no response is sent and no error is raised.
+The response depends on whether the ping includes any message text:
+
+| Ping type | Bot response |
+|---|---|
+| `@Bruh` (no text) | Always sends a random line from `mention_msgs.txt`, regardless of LLM setting. |
+| `@Bruh <message>` | Uses LLM if enabled; falls back to a random `mention_msgs.txt` line if LLM is disabled or fails. |
+
+> If `mention_msgs.txt` is empty and the bot needs to fall back to it, no response is sent and no error is raised.
 
 ---
 
@@ -318,11 +325,13 @@ The `misc/` folder must be in the same directory as `bot.py`. If the file is mis
 
 ### 6.8 LLM Responses
 
-If `ENABLE_LLM=true`, the bot replies with AI-generated text whenever it is @mentioned with a prompt or when someone replies directly to one of its messages:
+If `ENABLE_LLM=true`, the bot replies with AI-generated text whenever it is @mentioned **with a message**:
 
 ```
 @Bruh tell me a joke about ducks
 ```
+
+A bare `@Bruh` ping with no text always uses `mention_msgs.txt` and never hits the LLM.
 
 #### How Memory Works
 
@@ -358,10 +367,10 @@ Bruh:     The tomato one? It's still in the chat, I can see it. Not Pulitzer mat
 
 #### Other LLM behaviours
 
-- If the mention contains *no* text, the bot falls back to a random line from `mention_msgs.txt`.
-- Replying to a bot message works the same as a fresh @mention — the reply and surrounding channel context are both included.
+- A bare `@Bruh` ping with no text always falls back to a random line from `mention_msgs.txt` — the LLM is never called.
 - Set `LLM_PERCENTAGE=true` and `LLM_PERCENTAGE_VALUE` to make the bot only respond some of the time.
 - If the LLM fails or times out and `LLM_FALLBACK_ON_ERROR=true`, a random mention message (or `LLM_FALLBACK_MSG` if set) is sent instead of an error.
+- The system prompt is pre-configured to enforce single-voice output — the bot only ever speaks as itself and never simulates other users or writes dialogue on their behalf.
 
 > **⚠️** LLM integration requires network access to the provider and may incur usage costs. Test connectivity with `/llm-status` and watch the logs in `logs/` if enabled.
 
