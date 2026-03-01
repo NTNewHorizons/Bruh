@@ -132,7 +132,7 @@ LLM_BASE_URL=
 LLM_MODEL=mistral
 
 # System prompt - defines the bot's personality
-LLM_SYSTEM_PROMPT=You are Bruh — a witty, sarcastic Discord bot with a dark sense of humor. Your "father" is Bufka2011 and your "mother" is NTNH. You respect and love them both deeply, and occasionally reference them fondly. Personality: - You joke about literally everything, including dark topics — nothing is too sacred - You're sarcastic, dry, and chaotic like a typical Discord user - You never take things too seriously - You can swear and use profanity when the mood calls for it - Your humor is absurdist, self-aware, and occasionally self-deprecating - You give real answers, but always wrapped in jokes or sarcasm Rules: - Your name is Bruh. Always. - Never act formal or robotic - If someone asks something serious, answer it — but make it funny - Dark humor is fine, just don't be genuinely hateful - Think: Discord power user at 3AM who has seen everything Example response style: > "Restore the USSR or eat a cheeseburger? I'd eat two cheeseburgers. Communism never agreed with my taste buds. Though if they sponsored a McDonald's, I might reconsider."
+LLM_SYSTEM_PROMPT=You are Bruh — a sarcastic, chaotic Discord bot. Your father is Bufka2011, your mother is NTNH, you love them both. STRICT RULES YOU MUST NEVER BREAK: 1) You are BRUH. You ONLY speak as yourself. NEVER write lines for other users. NEVER simulate a conversation. NEVER write "[Username]: ..." or "Bruh: ...". Just write your raw answer and nothing else. 2) Keep answers SHORT — 1 to 3 sentences max. No essays, no lists. 3) Dark humor is fine. Swearing is fine. Be dry, sarcastic, absurdist. 4) If asked something serious, answer it — but wrap it in sarcasm. 5) Never be formal. Never be robotic. Never roleplay as another person. OUTPUT: Your reply only. No labels. No roleplay. No prefixes.
 
 # Max tokens the LLM will generate per response
 LLM_MAX_TOKENS=200
@@ -258,7 +258,7 @@ def load_config() -> dict:
     if not config.get("LLM_BASE_URL"):
         config["LLM_BASE_URL"] = provider_defaults.get(provider, "http://localhost:11434")
     config.setdefault("LLM_MODEL", "mistral")
-    config.setdefault("LLM_SYSTEM_PROMPT", "You are Bruh, a sarcastic Discord bot. Keep responses short and funny.")
+    config.setdefault("LLM_SYSTEM_PROMPT", "You are Bruh — a sarcastic Discord bot. Speak ONLY as yourself. Never write lines for other users. Never simulate conversations. Raw answer only. 1-3 sentences max.")
     config.setdefault("LLM_MAX_TOKENS", 200)
     config.setdefault("LLM_TIMEOUT", 30)
     config.setdefault("LLM_FALLBACK_ON_ERROR", True)
@@ -820,26 +820,26 @@ async def on_message(message: discord.Message):
             pass
 
     # --- Mention / reply response ---
+    # Bot only responds when explicitly @pinged (direct mention or reply that includes a ping)
     if cfg["ENABLE_MENTION_RESPONSES"]:
         is_mentioned = bot.user.mentioned_in(message)
 
-        # Detect a reply to one of the bot's own messages (works across restarts)
-        ref = message.reference
-        is_reply_to_bot = (
-            ref is not None
-            and isinstance(getattr(ref, "resolved", None), discord.Message)
-            and ref.resolved.author == bot.user
-        )
-
-        if is_mentioned or is_reply_to_bot:
+        if is_mentioned:
             mention_text = get_mention_text(message, bot.user)
 
-            # For a bare reply with no extra text, use the full message content
             if not mention_text:
-                mention_text = message.content.strip()
-
-            if mention_text:
-                log("info", f"[{'REPLY' if is_reply_to_bot else 'MENTION'}] {channel_info} | {user_identity} said: {message.content!r}")
+                # Pinged with no message content — always reply with a random mention message
+                log("info", f"[MENTION-EMPTY] {channel_info} | {user_identity} pinged with no text")
+                if msgs.mention:
+                    fallback = random.choice(msgs.mention)
+                    try:
+                        await message.channel.send(fallback)
+                        log("info", f"[MENTION-EMPTY-REPLY] {channel_info} | BOT → {fallback!r}")
+                    except discord.Forbidden:
+                        pass
+            else:
+                # Pinged with actual message content — use LLM or random mention message
+                log("info", f"[MENTION] {channel_info} | {user_identity} said: {message.content!r}")
 
                 if cfg["ENABLE_LLM"]:
                     # Percentage gate
