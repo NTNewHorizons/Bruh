@@ -2,7 +2,11 @@
 
 > A single-file Discord bot for random responses and community interactions.
 
-![Average Bruh interaction](https://github.com/NTNewHorizons/Bruh/blob/536e5002c15ae7bec5d8a6024868e57d1cba1a4c/.github/docs/averageBruh.png?raw=true "Average Bruh interaction")
+![Average Bruh interaction, example 1](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh1.png?raw=true "Average Bruh interaction, example 1")
+![Average Bruh interaction, example 2](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh2.png?raw=true "Average Bruh interaction, example 2")
+![Average Bruh interaction, example 3](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh3.png?raw=true "Average Bruh interaction, example 3")
+![Average Bruh interaction, example 4](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh4.png?raw=true "Average Bruh interaction, example 4")
+![Average Bruh interaction, example 5](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh5.png?raw=true "Average Bruh interaction, example 5")
 
 | | |
 |---|---|
