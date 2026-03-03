@@ -2,11 +2,11 @@
 
 > A single-file Discord bot for random responses and community interactions.
 
-![Average Bruh interaction, example 1](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh1.png?raw=true "Average Bruh interaction, example 1")
-![Average Bruh interaction, example 2](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh2.png?raw=true "Average Bruh interaction, example 2")
-![Average Bruh interaction, example 3](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh3.png?raw=true "Average Bruh interaction, example 3")
-![Average Bruh interaction, example 4](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh4.png?raw=true "Average Bruh interaction, example 4")
-![Average Bruh interaction, example 5](https://github.com/NTNewHorizons/Bruh/blob/fcd22cfada573bbc8f747fe04da05a4e234a425c/.github/docs/averageBruh5.png?raw=true "Average Bruh interaction, example 5")
+![](.github/docs/averageBruh1.png)
+![](.github/docs/averageBruh2.png)
+![](.github/docs/averageBruh3.png)
+![](.github/docs/averageBruh4.png)
+![](.github/docs/averageBruh5.png)
 
 | | |
 |---|---|
