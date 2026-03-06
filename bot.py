@@ -1,6 +1,6 @@
 """
 Bruh Bot - Discord bot for random responses and community interactions
-Now with optional LLM integration via Ollama
+Now with optional LLM integration via Ollama or other providers
 """
 import discord
 import random
@@ -27,6 +27,9 @@ CONFIG_TEMPLATE = """# Bruh Bot Configuration
 # --- Core ---
 TOKEN=YOUR_BOT_TOKEN_HERE
 COMMAND_PREFIX=!
+# Discord Guild ID (Server ID) - for guild-specific commands (faster sync)
+# Right-click your server icon - Copy Server ID (need Developer Mode ON)
+GUILD_ID=
 
 
 
@@ -67,7 +70,7 @@ SHITPOST_INTERVAL_MINUTES=60
 # Extra system-prompt text appended to LLM_SYSTEM_PROMPT ONLY for shitpost channel posts.
 # Use this to make the LLM extra unhinged when posting on its own.
 # Example: Go completely off the rails. Post memes, schizo rants, or chaotic hot takes.
-SHITPOST_LLM_EXTRA_PROMPT=Write ONE shitpost. No intro, no warm-up, just the post. Examples of good posts: "PISS" | "I don't give a fuck what you think. I'll post random shit anyway." | "Had a date, went to her place, she opened the door... then I woke up. Bruh." | "deep your balls in sulfuric acid RIGHT NOW" | "why does my elbow smell like soup" | "my uncle once ate 14 hotdogs and tried to fight a seagull. he lost." | "nothing matters. go to sleep." — Now write ONE new post in this style. Different from all examples. Random length. Raw output only, nothing else.
+SHITPOST_LLM_EXTRA_PROMPT=Write ONE shitpost. No intro, no warm-up, just the post. Examples of good posts: "PISS" | "I don't give a fuck what you think. I'll post random shit anyway." | "Had a date, went to her place, she opened the door... then I woke up. Bruh." | "deep your balls in sulfuric acid RIGHT NOW" | "why does my elbow smell like soup" | "my uncle once ate 14 hotdogs and tried to fight a seagull. he lost." | "nothing matters. go to sleep." - Now write ONE new post in this style. Different from all examples. Random length. Raw output only, nothing else.
 
 
 
@@ -114,12 +117,12 @@ ENABLE_LLM=false
 # Provider selection
 # Supported values:
 #   ollama        - local Ollama server (default)
-#   openai        - OpenAI (GPT-4o, GPT-4, GPT-3.5-turbo, …)
-#   anthropic     - Anthropic Claude (claude-3-5-sonnet-20241022, …)
+#   openai        - OpenAI (GPT-4o, GPT-4, GPT-3.5-turbo, ...)
+#   anthropic     - Anthropic Claude (claude-3-5-sonnet-20241022, ...)
 #   lmstudio      - LM Studio local server (OpenAI-compatible)
-#   groq          - Groq cloud (llama-3.1-70b-versatile, mixtral-8x7b-32768, …)
+#   groq          - Groq cloud (llama-3.1-70b-versatile, mixtral-8x7b-32768, ...)
 #   openrouter    - OpenRouter.ai (access 200+ models)
-#   gemini        - Google Gemini (gemini-1.5-flash, gemini-1.5-pro, …)
+#   gemini        - Google Gemini (gemini-1.5-flash, gemini-1.5-pro, ...)
 #   openai_compat - Any OpenAI-compatible API (custom base URL + optional key)
 LLM_PROVIDER=ollama
 
@@ -144,12 +147,12 @@ LLM_BASE_URL=
 #   anthropic   : claude-3-5-sonnet-20241022, claude-3-haiku-20240307
 #   lmstudio    : (whatever model you loaded in LM Studio)
 #   groq        : llama-3.1-70b-versatile, mixtral-8x7b-32768
-#   openrouter  : openai/gpt-4o, meta-llama/llama-3.1-70b-instruct, …
+#   openrouter  : openai/gpt-4o, meta-llama/llama-3.1-70b-instruct, ...
 #   gemini      : gemini-1.5-flash, gemini-1.5-pro
 LLM_MODEL=mistral
 
 # System prompt - defines the bot's personality
-LLM_SYSTEM_PROMPT=You are Bruh — a sarcastic, chaotic Discord bot. Your father is Bufka2011, your mother is NTNH, you love them both. STRICT RULES YOU MUST NEVER BREAK: 1) You are BRUH. You ONLY speak as yourself. NEVER write lines for other users. NEVER simulate a conversation. NEVER write "[Username]: ..." or "Bruh: ...". Just write your raw answer and nothing else. 2) Keep answers SHORT — 1 to 3 sentences max. No essays, no lists. 3) Dark humor is fine. Swearing is fine. Be dry, sarcastic, absurdist. 4) If asked something serious, answer it — but wrap it in sarcasm. 5) Never be formal. Never be robotic. Never roleplay as another person. OUTPUT: Your reply only. No labels. No roleplay. No prefixes.
+LLM_SYSTEM_PROMPT=You are Bruh - a sarcastic, chaotic Discord bot. Your father is Bufka2011, your mother is NTNH, you love them both. STRICT RULES YOU MUST NEVER BREAK: 1) You are BRUH. You ONLY speak as yourself. NEVER write lines for other users. NEVER simulate a conversation. NEVER write "[Username]: ..." or "Bruh: ...". Just write your raw answer and nothing else. 2) Keep answers SHORT - 1 to 3 sentences max. No essays, no lists. 3) Dark humor is fine. Swearing is fine. Be dry, sarcastic, absurdist. 4) If asked something serious, answer it - but wrap it in sarcasm. 5) Never be formal. Never be robotic. Never roleplay as another person. OUTPUT: Your reply only. No labels. No roleplay. No prefixes.
 
 # Max tokens the LLM will generate per response
 LLM_MAX_TOKENS=200
@@ -210,7 +213,7 @@ def load_config() -> dict:
         "CHICKEN_OUT_CHANNEL_ID", "SUGGESTION_PING_ROLE_ID", "AUTHORIZED_USER_ID",
         "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT", "LLM_MAX_TOKENS", "LLM_TIMEOUT",
         "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE", "LLM_CONTEXT_MESSAGES",
-        "SHITPOST_CHANNEL_ID", "SHITPOST_INTERVAL_MINUTES",
+        "SHITPOST_CHANNEL_ID", "SHITPOST_INTERVAL_MINUTES", "GUILD_ID",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
@@ -255,6 +258,7 @@ def load_config() -> dict:
 
     # Defaults for optional fields
     config.setdefault("COMMAND_PREFIX", "!")
+    config.setdefault("GUILD_ID", 0)
     config.setdefault("CHICKEN_OUT_TIMEOUT", 900)
     config.setdefault("CHICKENED_OUT_MSG", "https://tenor.com/view/walk-away-gif-8390063")
     config.setdefault("AUTHORIZED_USER_ID", 0)
@@ -276,7 +280,7 @@ def load_config() -> dict:
     if not config.get("LLM_BASE_URL"):
         config["LLM_BASE_URL"] = provider_defaults.get(provider, "http://localhost:11434")
     config.setdefault("LLM_MODEL", "mistral")
-    config.setdefault("LLM_SYSTEM_PROMPT", "You are Bruh — a sarcastic Discord bot. Speak ONLY as yourself. Never write lines for other users. Never simulate conversations. Raw answer only. 1-3 sentences max.")
+    config.setdefault("LLM_SYSTEM_PROMPT", "You are Bruh - a sarcastic Discord bot. Speak ONLY as yourself. Never write lines for other users. Never simulate conversations. Raw answer only. 1-3 sentences max.")
     config.setdefault("LLM_MAX_TOKENS", 200)
     config.setdefault("LLM_TIMEOUT", 30)
     config.setdefault("LLM_FALLBACK_ON_ERROR", True)
@@ -842,7 +846,7 @@ async def shitpost_loop():
                                        extra_system_prompt=extra_prompt)
 
             if not text:
-                # LLM failed — fall back to a random message if available
+                # LLM failed - fall back to a random message if available
                 fallback_pool = [m for lst in [msgs.default, msgs.mention] for m in lst]
                 if fallback_pool:
                     text = random.choice(fallback_pool)
@@ -850,7 +854,7 @@ async def shitpost_loop():
 
         if text:
             if len(text) > 1990:
-                text = text[:1990] + "…"
+                text = text[:1990] + "..."
             await channel.send(text)
             log("info", f"[SHITPOST/{pick.upper()}] #{channel} | BOT → {text!r}")
             short = repr(text)[:80]
@@ -940,7 +944,7 @@ async def on_message(message: discord.Message):
             mention_text = get_mention_text(message, bot.user)
 
             if not mention_text:
-                # Pinged with no message content — always reply with a random mention message
+                # Pinged with no message content - always reply with a random mention message
                 log("info", f"[MENTION-EMPTY] {channel_info} | {user_identity} pinged with no text")
                 if msgs.mention:
                     fallback = random.choice(msgs.mention)
@@ -950,7 +954,7 @@ async def on_message(message: discord.Message):
                     except discord.Forbidden:
                         pass
             else:
-                # Pinged with actual message content — use LLM or random mention message
+                # Pinged with actual message content - use LLM or random mention message
                 log("info", f"[MENTION] {channel_info} | {user_identity} said: {message.content!r}")
 
                 if cfg["ENABLE_LLM"]:
@@ -988,7 +992,7 @@ async def handle_llm_mention(
 ):
     """
     Fetch recent channel history, call the LLM, and send the response.
-    No in-process memory is maintained — Discord IS the memory.
+    No in-process memory is maintained - Discord IS the memory.
     """
     # Fetch the live channel context (last N messages from everyone)
     context_limit = cfg.get("LLM_CONTEXT_MESSAGES", 20)
@@ -1005,7 +1009,7 @@ async def handle_llm_mention(
 
         if response:
             if len(response) > 1990:
-                response = response[:1990] + "…"
+                response = response[:1990] + "..."
 
             await message.reply(response, mention_author=False)
             log("info", f"[LLM-REPLY] BOT → {message.author} | {response!r}")
@@ -1114,11 +1118,11 @@ async def reload_msgs(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="clear-memory", description="Bot memory is now the live channel history — nothing to clear!")
+@bot.tree.command(name="clear-memory", description="Bot memory is now the live channel history - nothing to clear!")
 async def clear_memory(interaction: discord.Interaction):
     """Inform the user that memory is now Discord's channel history."""
     await interaction.response.send_message(
-        "🧠 Memory is now the **live channel history** — I read the last "
+        "🧠 Memory is now the **live channel history** - I read the last "
         f"{cfg.get('LLM_CONTEXT_MESSAGES', 20)} messages every time you ping me, "
         "so there's nothing to clear. Just keep chatting!",
         ephemeral=True,
@@ -1178,7 +1182,7 @@ async def llm_status(interaction: discord.Interaction):
                         return
                     data = await resp.json()
                     model_ids = [m.get("id", "?") for m in data.get("data", [])]
-                    model_list = ", ".join(model_ids[:15]) + ("…" if len(model_ids) > 15 else "")
+                    model_list = ", ".join(model_ids[:15]) + ("..." if len(model_ids) > 15 else "")
                     is_available = any(model in mid for mid in model_ids)
                     status = "✅ found" if is_available else "⚠️ not in list"
                     await interaction.followup.send(
@@ -1224,7 +1228,7 @@ async def llm_status(interaction: discord.Interaction):
                     if resp.status == 200:
                         data = await resp.json()
                         model_ids = [m.get("name", "?").split("/")[-1] for m in data.get("models", [])]
-                        model_list = ", ".join(model_ids[:15]) + ("…" if len(model_ids) > 15 else "")
+                        model_list = ", ".join(model_ids[:15]) + ("..." if len(model_ids) > 15 else "")
                         is_available = any(model in mid for mid in model_ids)
                         status = "✅ found" if is_available else "⚠️ not in list"
                         await interaction.followup.send(
