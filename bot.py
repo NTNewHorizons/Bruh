@@ -27,8 +27,10 @@ CONFIG_TEMPLATE = """# Bruh Bot Configuration
 # --- Core ---
 TOKEN=YOUR_BOT_TOKEN_HERE
 COMMAND_PREFIX=!
-# Discord Guild ID (Server ID) - for guild-specific commands (faster sync)
-# Right-click your server icon - Copy Server ID (need Developer Mode ON)
+
+# Discord Guild (Server) ID - used for guild-specific commands (instant sync).
+# Right-click your server icon - Copy Server ID (requires Developer Mode).
+# Leave blank to register ALL commands globally (takes up to 1 hour to update).
 GUILD_ID=
 
 
@@ -267,14 +269,14 @@ def load_config() -> dict:
     config.setdefault("LLM_API_KEY", "")
     # Resolve default base URL per provider if not set
     provider_defaults = {
-        "ollama":       "http://localhost:11434",
-        "lmstudio":     "http://localhost:1234",
-        "openai":       "https://api.openai.com",
-        "anthropic":    "https://api.anthropic.com",
-        "groq":         "https://api.groq.com/openai",
-        "openrouter":   "https://openrouter.ai/api",
-        "gemini":       "https://generativelanguage.googleapis.com",
-        "openai_compat":"http://localhost:8080",
+        "ollama":        "http://localhost:11434",
+        "lmstudio":      "http://localhost:1234",
+        "openai":        "https://api.openai.com",
+        "anthropic":     "https://api.anthropic.com",
+        "groq":          "https://api.groq.com/openai",
+        "openrouter":    "https://openrouter.ai/api",
+        "gemini":        "https://generativelanguage.googleapis.com",
+        "openai_compat": "http://localhost:8080",
     }
     provider = config.get("LLM_PROVIDER", "ollama").lower()
     if not config.get("LLM_BASE_URL"):
@@ -311,6 +313,10 @@ def load_config() -> dict:
 
 
 cfg = load_config()
+
+# Guild object used for guild-specific command registration (instant sync).
+# "Suggest message" context menu stays global; everything else is guild-only.
+_GUILD: discord.Object | None = discord.Object(id=cfg["GUILD_ID"]) if cfg.get("GUILD_ID") else None
 
 
 # ============================================================
@@ -365,10 +371,6 @@ def log(level: str, text: str):
 # ============================================================
 # CONVERSATION MEMORY  (Discord channel history = our memory)
 # ============================================================
-# Instead of maintaining in-process dicts that die on restart and only
-# track a single user, we fetch the last N real messages from the channel
-# each time the bot is mentioned.  Discord stores them permanently, every
-# user's messages are included, and there is nothing to leak.
 
 async def fetch_channel_context(
     channel: discord.TextChannel,
@@ -379,7 +381,6 @@ async def fetch_channel_context(
     """
     Fetch the last `limit` messages from the channel (excluding the current
     one if provided) and return them as a list of {role, content} dicts.
-    Pass current_message=None to fetch the very latest messages (used by shitpost loop).
     """
     if limit <= 0:
         return []
@@ -389,10 +390,10 @@ async def fetch_channel_context(
     if current_message is not None:
         kwargs["before"] = current_message
     async for msg in channel.history(**kwargs):
-        if msg.content:          # skip embeds-only / attachment-only messages
+        if msg.content:
             raw.append(msg)
 
-    raw.reverse()                # put oldest first
+    raw.reverse()
 
     history: list[dict] = []
     for msg in raw:
@@ -406,7 +407,6 @@ async def fetch_channel_context(
             history.append({"role": "user", "content": f"[{name}]: {msg.content}"})
 
     return history
-
 
 
 # ============================================================
@@ -440,7 +440,6 @@ class MessageLists:
         self.mention = self._read_file(cfg["MENTION_MSGS_FILE"])
 
     def add(self, message: str, list_type: str) -> bool:
-        """Add a message to 'default' or 'mention'. Returns True if added, False if duplicate."""
         target = self.default if list_type == "default" else self.mention
         filename = cfg["DEFAULT_MSGS_FILE"] if list_type == "default" else cfg["MENTION_MSGS_FILE"]
         if message in target:
@@ -487,16 +486,8 @@ def get_mention_text(message: discord.Message, bot_user: discord.ClientUser) -> 
 # LLM CLIENT
 # ============================================================
 
-# ── LLM provider helpers ──────────────────────────────────────────────────
-
 def _build_messages(prompt: str, user_identity: str, history: list[dict],
                     extra_system_prompt: str = "") -> list[dict]:
-    """
-    Build the standard messages array (system + channel history + new user turn).
-    `history` is the pre-fetched channel context from fetch_channel_context().
-    The current user's message is appended last so it is always answered.
-    `extra_system_prompt` is appended to the system prompt when supplied (e.g. for shitpost mode).
-    """
     system_prompt = (
         cfg["LLM_SYSTEM_PROMPT"]
         + (f"\n\n{extra_system_prompt}" if extra_system_prompt else "")
@@ -512,7 +503,6 @@ def _build_messages(prompt: str, user_identity: str, history: list[dict],
 
 
 async def _query_ollama(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
-    """Ollama  →  POST /api/chat"""
     url = f"{cfg['LLM_BASE_URL']}/api/chat"
     payload = {
         "model": cfg["LLM_MODEL"],
@@ -530,9 +520,6 @@ async def _query_ollama(messages: list[dict], session: aiohttp.ClientSession) ->
 
 async def _query_openai_compat(messages: list[dict], session: aiohttp.ClientSession,
                                 base_url: str, api_key: str) -> str | None:
-    """OpenAI-compatible endpoint  →  POST /v1/chat/completions
-    Works for: OpenAI, LM Studio, Groq, OpenRouter, openai_compat.
-    """
     url = f"{base_url.rstrip('/')}/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -551,10 +538,6 @@ async def _query_openai_compat(messages: list[dict], session: aiohttp.ClientSess
 
 
 async def _query_anthropic(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
-    """Anthropic Messages API  →  POST /v1/messages
-    System prompt is extracted and sent as a top-level 'system' field.
-    """
-    # Anthropic keeps system separate; strip it from messages list
     system_text = ""
     chat_messages = []
     for m in messages:
@@ -584,17 +567,12 @@ async def _query_anthropic(messages: list[dict], session: aiohttp.ClientSession)
 
 
 async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
-    """Google Gemini  →  POST /v1beta/models/{model}:generateContent
-    Converts the messages array to Gemini's 'contents' format.
-    """
-    # Extract system instruction and chat turns
     system_text = ""
     contents = []
     for m in messages:
         if m["role"] == "system":
             system_text = m["content"]
         else:
-            # Gemini uses "user" / "model" roles
             role = "model" if m["role"] == "assistant" else "user"
             contents.append({"role": role, "parts": [{"text": m["content"]}]})
 
@@ -619,11 +597,6 @@ async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession) ->
 
 async def query_llm(prompt: str, user_identity: str, history: list[dict],
                     extra_system_prompt: str = "") -> str | None:
-    """
-    Dispatch to the correct LLM provider based on LLM_PROVIDER config.
-    `extra_system_prompt` is appended to the system prompt when supplied.
-    ...
-    """
     provider = cfg.get("LLM_PROVIDER", "ollama").lower()
     messages  = _build_messages(prompt, user_identity, history, extra_system_prompt)
 
@@ -648,8 +621,7 @@ async def query_llm(prompt: str, user_identity: str, history: list[dict],
                 )
 
             else:
-                print(f"❌ Unknown LLM_PROVIDER '{provider}'. "
-                      "Choose: ollama, openai, anthropic, lmstudio, groq, openrouter, gemini, openai_compat")
+                print(f"❌ Unknown LLM_PROVIDER '{provider}'.")
                 return None
 
     except asyncio.TimeoutError:
@@ -695,7 +667,6 @@ class SuggestionView(discord.ui.View):
         return True
 
     async def _close(self, interaction: discord.Interaction, label: str):
-        """Disable all buttons and stamp the decision on the message."""
         await interaction.message.edit(
             content=f"~~{interaction.message.content}~~\n{label} by {interaction.user.mention}",
             embed=None,
@@ -772,7 +743,6 @@ def build_suggestion_embed(
 
 async def post_suggestion(interaction: discord.Interaction, content: str,
                           author=None, jump_url=None):
-    """Send a suggestion to the suggestion channel."""
     channel = bot.get_channel(cfg["SUGGESTION_CHANNEL_ID"])
     if not channel:
         await interaction.response.send_message("❌ Suggestion channel not found.", ephemeral=True)
@@ -790,10 +760,82 @@ from discord.ext import tasks
 
 
 # ============================================================
+# COMMAND DEDUPLICATION
+# ============================================================
+
+async def fix_duplicate_commands():
+    """
+    Automatically detect and fix duplicate commands.
+
+    Discord stores global and guild commands separately. Duplicates appear when
+    the same command was previously synced both globally AND to the guild.
+    This function checks for overlap and wipes the correct scope to fix it.
+
+    Strategy:
+      - "Suggest message" (APP context menu) - must be GLOBAL only
+      - All other commands - must be GUILD only (if GUILD_ID is set)
+      - Any command that exists in both scopes is a duplicate - remove from wrong scope
+    """
+    if _GUILD is None:
+        # No guild configured - everything is global, nothing to deduplicate
+        return
+
+    print("🔍 Checking for duplicate commands...")
+
+    try:
+        global_commands  = await bot.tree.fetch_commands()                  # global
+        guild_commands   = await bot.tree.fetch_commands(guild=_GUILD)      # guild
+    except Exception as e:
+        print(f"⚠️  Could not fetch commands for dedup check: {e}")
+        return
+
+    global_names = {c.name for c in global_commands}
+    guild_names  = {c.name for c in guild_commands}
+
+    # Names that should ONLY be global
+    GLOBAL_ONLY  = {"Suggest message"}
+    # Names that should ONLY be in the guild (everything else registered by this bot)
+    GUILD_ONLY   = guild_names | global_names - GLOBAL_ONLY
+
+    duplicates_found = False
+
+    # 1. Any GLOBAL_ONLY command that leaked into guild scope - remove from guild
+    leaked_to_guild = GLOBAL_ONLY & guild_names
+    if leaked_to_guild:
+        print(f"⚠️  Found guild-scope duplicates of global commands: {leaked_to_guild}")
+        duplicates_found = True
+
+    # 2. Any GUILD_ONLY command that leaked into global scope - remove from global
+    leaked_to_global = (GUILD_ONLY - GLOBAL_ONLY) & global_names
+    if leaked_to_global:
+        print(f"⚠️  Found global-scope duplicates of guild commands: {leaked_to_global}")
+        duplicates_found = True
+
+    if not duplicates_found:
+        print("✅ No duplicate commands found.")
+        return
+
+    print("🔧 Fixing duplicates - clearing and re-syncing commands...")
+
+    try:
+        # Clear and re-sync global scope (keep only GLOBAL_ONLY commands)
+        await bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()
+
+        # Clear and re-sync guild scope (keep only GUILD_ONLY commands)
+        await bot.tree.clear_commands(guild=_GUILD)
+        await bot.tree.sync(guild=_GUILD)
+
+        print("✅ Duplicate commands fixed and commands re-synced.")
+    except Exception as e:
+        print(f"❌ Failed to fix duplicate commands: {e}")
+
+
+# ============================================================
 # SHITPOST LOOP
 # ============================================================
 
-@tasks.loop(minutes=1)   # actual interval is set dynamically in on_ready
+@tasks.loop(minutes=1)
 async def shitpost_loop():
     """Periodically drop a random post in the shitpost channel."""
     if not cfg["ENABLE_SHITPOST"]:
@@ -804,21 +846,17 @@ async def shitpost_loop():
         print(f"⚠️  Shitpost channel not found (ID: {cfg['SHITPOST_CHANNEL_ID']}). Skipping.")
         return
 
-    # 3 possible post types: default_msg, mention_msg, LLM
     choices = ["default", "mention", "llm"]
 
-    # If LLM is disabled, remove it from the pool
     if not cfg["ENABLE_LLM"]:
         choices.remove("llm")
-
-    # If message lists are empty, skip those options
     if not msgs.default and "default" in choices:
         choices.remove("default")
     if not msgs.mention and "mention" in choices:
         choices.remove("mention")
 
     if not choices:
-        print("⚠️  Shitpost: no content available (empty message lists and LLM disabled).")
+        print("⚠️  Shitpost: no content available.")
         return
 
     pick = random.choice(choices)
@@ -833,7 +871,6 @@ async def shitpost_loop():
 
         elif pick == "llm":
             extra_prompt = cfg.get("SHITPOST_LLM_EXTRA_PROMPT", "").strip()
-            # Build a self-prompted post: the "user" turn tells the bot to just say something
             shitpost_trigger = "Post something random right now. No context. Just go."
             history = await fetch_channel_context(channel, None, bot.user,
                                                   limit=cfg.get("LLM_CONTEXT_MESSAGES", 20))
@@ -846,7 +883,6 @@ async def shitpost_loop():
                                        extra_system_prompt=extra_prompt)
 
             if not text:
-                # LLM failed - fall back to a random message if available
                 fallback_pool = [m for lst in [msgs.default, msgs.mention] for m in lst]
                 if fallback_pool:
                     text = random.choice(fallback_pool)
@@ -856,9 +892,9 @@ async def shitpost_loop():
             if len(text) > 1990:
                 text = text[:1990] + "..."
             await channel.send(text)
-            log("info", f"[SHITPOST/{pick.upper()}] #{channel} | BOT → {text!r}")
+            log("info", f"[SHITPOST/{pick.upper()}] #{channel} | BOT - {text!r}")
             short = repr(text)[:80]
-            print(f"💩 Shitpost ({pick}) → #{channel}: {short}")
+            print(f"💩 Shitpost ({pick}) - #{channel}: {short}")
 
     except discord.Forbidden:
         print(f"❌ Shitpost: no permission to send in #{channel}.")
@@ -883,20 +919,34 @@ async def on_ready():
     print(f"   LLM          : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] + ' @ ' + cfg['LLM_BASE_URL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
     print(f"   Context msgs : last {cfg['LLM_CONTEXT_MESSAGES']} channel messages per response")
     print(f"   Logging      : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
+    print(f"   Guild ID     : {cfg['GUILD_ID'] if cfg['GUILD_ID'] else '❌ not set (all commands global)'}")
+
+    # ── Auto-fix duplicates before syncing ──────────────────────────────────
+    await fix_duplicate_commands()
+
+    # ── Sync commands ────────────────────────────────────────────────────────
     try:
-        await bot.tree.sync()
-        print("🔄 Slash commands synced.")
+        # Global sync - only registers "Suggest message" context menu (no guild=)
+        synced_global = await bot.tree.sync()
+
+        if _GUILD:
+            # Guild sync - registers all other commands instantly
+            synced_guild = await bot.tree.sync(guild=_GUILD)
+            print(f"🔄 Commands synced: {len(synced_global)} global, {len(synced_guild)} guild.")
+        else:
+            print(f"🔄 Commands synced: {len(synced_global)} global (no GUILD_ID set).")
+
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
 
-    # --- Shitpost loop ---
+    # ── Shitpost loop ────────────────────────────────────────────────────────
     if cfg["ENABLE_SHITPOST"]:
         interval = max(1, cfg["SHITPOST_INTERVAL_MINUTES"])
         shitpost_loop.change_interval(minutes=interval)
         if not shitpost_loop.is_running():
             shitpost_loop.start()
         extra = cfg.get("SHITPOST_LLM_EXTRA_PROMPT", "").strip()
-        print(f"   Shitpost     : ✅ every {interval} min → channel {cfg['SHITPOST_CHANNEL_ID']}")
+        print(f"   Shitpost     : ✅ every {interval} min - channel {cfg['SHITPOST_CHANNEL_ID']}")
         print(f"   Shitpost LLM extra prompt: {'✅ set' if extra else 'ℹ️  none'}")
     else:
         print(f"   Shitpost     : ❌ disabled")
@@ -931,12 +981,11 @@ async def on_message(message: discord.Message):
         try:
             random_msg = random.choice(msgs.default)
             await message.channel.send(random_msg)
-            log("info", f"[RANDOM] {channel_info} | BOT → {random_msg!r}")
+            log("info", f"[RANDOM] {channel_info} | BOT - {random_msg!r}")
         except discord.Forbidden:
             pass
 
     # --- Mention / reply response ---
-    # Bot only responds when explicitly @pinged (direct mention or reply that includes a ping)
     if cfg["ENABLE_MENTION_RESPONSES"]:
         is_mentioned = bot.user.mentioned_in(message)
 
@@ -944,28 +993,25 @@ async def on_message(message: discord.Message):
             mention_text = get_mention_text(message, bot.user)
 
             if not mention_text:
-                # Pinged with no message content - always reply with a random mention message
                 log("info", f"[MENTION-EMPTY] {channel_info} | {user_identity} pinged with no text")
                 if msgs.mention:
                     fallback = random.choice(msgs.mention)
                     try:
                         await message.channel.send(fallback)
-                        log("info", f"[MENTION-EMPTY-REPLY] {channel_info} | BOT → {fallback!r}")
+                        log("info", f"[MENTION-EMPTY-REPLY] {channel_info} | BOT - {fallback!r}")
                     except discord.Forbidden:
                         pass
             else:
-                # Pinged with actual message content - use LLM or random mention message
                 log("info", f"[MENTION] {channel_info} | {user_identity} said: {message.content!r}")
 
                 if cfg["ENABLE_LLM"]:
-                    # Percentage gate
                     if cfg["LLM_PERCENTAGE"] and random.randint(1, 100) > cfg["LLM_PERCENTAGE_VALUE"]:
                         log("debug", f"[LLM] Skipped (percentage gate) for {user_identity}")
                         if msgs.mention:
                             fallback = random.choice(msgs.mention)
                             try:
                                 await message.channel.send(fallback)
-                                log("info", f"[LLM-PCT-SKIP] {channel_info} | BOT → {fallback!r}")
+                                log("info", f"[LLM-PCT-SKIP] {channel_info} | BOT - {fallback!r}")
                             except discord.Forbidden:
                                 pass
                         await bot.process_commands(message)
@@ -973,12 +1019,11 @@ async def on_message(message: discord.Message):
 
                     await handle_llm_mention(message, mention_text, user_identity)
                 else:
-                    # Non-LLM path - fall back to random mention message
                     if msgs.mention:
                         fallback = random.choice(msgs.mention)
                         try:
                             await message.channel.send(fallback)
-                            log("info", f"[MENTION-REPLY] {channel_info} | BOT → {fallback!r}")
+                            log("info", f"[MENTION-REPLY] {channel_info} | BOT - {fallback!r}")
                         except discord.Forbidden:
                             pass
 
@@ -990,11 +1035,6 @@ async def handle_llm_mention(
     prompt: str,
     user_identity: str,
 ):
-    """
-    Fetch recent channel history, call the LLM, and send the response.
-    No in-process memory is maintained - Discord IS the memory.
-    """
-    # Fetch the live channel context (last N messages from everyone)
     context_limit = cfg.get("LLM_CONTEXT_MESSAGES", 20)
     history = await fetch_channel_context(
         message.channel, message, bot.user, limit=context_limit
@@ -1012,7 +1052,7 @@ async def handle_llm_mention(
                 response = response[:1990] + "..."
 
             await message.reply(response, mention_author=False)
-            log("info", f"[LLM-REPLY] BOT → {message.author} | {response!r}")
+            log("info", f"[LLM-REPLY] BOT - {message.author} | {response!r}")
         else:
             raise ValueError("Empty response from LLM")
 
@@ -1026,7 +1066,7 @@ async def handle_llm_mention(
             if fallback:
                 try:
                     await message.channel.send(fallback)
-                    log("info", f"[LLM-FALLBACK] BOT → {message.author} | {fallback!r}")
+                    log("info", f"[LLM-FALLBACK] BOT - {message.author} | {fallback!r}")
                 except discord.Forbidden:
                     pass
 
@@ -1096,10 +1136,11 @@ async def hbm(ctx: commands.Context):
 
 
 # ============================================================
-# SLASH COMMANDS
+# SLASH COMMANDS  (guild-only - instant sync)
 # ============================================================
 
-@bot.tree.command(name="suggest-msg", description="Suggest a message for the bot to use")
+@bot.tree.command(name="suggest-msg", description="Suggest a message for the bot to use",
+                  guild=_GUILD)
 @app_commands.describe(message="The message to suggest")
 async def suggest_msg(interaction: discord.Interaction, message: str):
     if not cfg["ENABLE_SUGGESTIONS"]:
@@ -1108,7 +1149,9 @@ async def suggest_msg(interaction: discord.Interaction, message: str):
     await post_suggestion(interaction, message)
 
 
-@bot.tree.command(name="reload-msgs", description="Reload message lists from disk (admin only)")
+@bot.tree.command(name="reload-msgs",
+                  description="Reload message lists from disk (admin only)",
+                  guild=_GUILD)
 @app_commands.default_permissions(administrator=True)
 async def reload_msgs(interaction: discord.Interaction):
     msgs.load()
@@ -1118,9 +1161,10 @@ async def reload_msgs(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="clear-memory", description="Bot memory is now the live channel history - nothing to clear!")
+@bot.tree.command(name="clear-memory",
+                  description="Bot memory is now the live channel history - nothing to clear!",
+                  guild=_GUILD)
 async def clear_memory(interaction: discord.Interaction):
-    """Inform the user that memory is now Discord's channel history."""
     await interaction.response.send_message(
         "🧠 Memory is now the **live channel history** - I read the last "
         f"{cfg.get('LLM_CONTEXT_MESSAGES', 20)} messages every time you ping me, "
@@ -1129,10 +1173,11 @@ async def clear_memory(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="llm-status", description="Check LLM connection status (admin only)")
+@bot.tree.command(name="llm-status",
+                  description="Check LLM connection status (admin only)",
+                  guild=_GUILD)
 @app_commands.default_permissions(administrator=True)
 async def llm_status(interaction: discord.Interaction):
-    """Ping the configured LLM provider and report status."""
     if not cfg["ENABLE_LLM"]:
         await interaction.response.send_message("❌ LLM is disabled in config.", ephemeral=True)
         return
@@ -1148,7 +1193,6 @@ async def llm_status(interaction: discord.Interaction):
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
 
-            # ── Ollama: list installed models ──────────────────────────────
             if provider == "ollama":
                 async with session.get(f"{base_url}/api/tags") as resp:
                     if resp.status != 200:
@@ -1166,7 +1210,6 @@ async def llm_status(interaction: discord.Interaction):
                         ephemeral=True,
                     )
 
-            # ── OpenAI / LM Studio / Groq / OpenRouter / openai_compat: list models ──
             elif provider in ("openai", "lmstudio", "groq", "openrouter", "openai_compat"):
                 headers = {}
                 if api_key:
@@ -1194,7 +1237,6 @@ async def llm_status(interaction: discord.Interaction):
                         ephemeral=True,
                     )
 
-            # ── Anthropic: send a tiny test message ────────────────────────
             elif provider == "anthropic":
                 url = f"{base_url.rstrip('/')}/v1/messages"
                 headers = {
@@ -1221,7 +1263,6 @@ async def llm_status(interaction: discord.Interaction):
                             ephemeral=True,
                         )
 
-            # ── Gemini: list models ────────────────────────────────────────
             elif provider == "gemini":
                 url = f"{base_url.rstrip('/')}/v1beta/models?key={api_key}"
                 async with session.get(url) as resp:
@@ -1260,6 +1301,7 @@ async def llm_status(interaction: discord.Interaction):
 # CONTEXT MENU COMMANDS
 # ============================================================
 
+# ── GLOBAL: visible in every server the bot is in ────────────────────────
 @bot.tree.context_menu(name="Suggest message")
 async def suggest_message_ctx(interaction: discord.Interaction, message: discord.Message):
     if not cfg["ENABLE_SUGGESTIONS"]:
@@ -1271,7 +1313,8 @@ async def suggest_message_ctx(interaction: discord.Interaction, message: discord
     await post_suggestion(interaction, message.content, message.author, message.jump_url)
 
 
-@bot.tree.context_menu(name="Rape member")
+# ── GUILD-ONLY: visible only in the configured guild ─────────────────────
+@bot.tree.context_menu(name="Rape member", guild=_GUILD)
 async def rape_member_ctx(interaction: discord.Interaction, member: discord.Member):
     if not cfg["ENABLE_RAPE_COMMAND"]:
         await interaction.response.send_message("❌ This command is disabled.", ephemeral=True)
@@ -1295,6 +1338,7 @@ async def rape_member_ctx(interaction: discord.Interaction, member: discord.Memb
 if __name__ == "__main__":
     print("🚀 Starting Bruh Bot...")
     print(f"   Prefix               : {cfg['COMMAND_PREFIX']}")
+    print(f"   Guild ID             : {cfg['GUILD_ID'] if cfg['GUILD_ID'] else '❌ not set (all commands global)'}")
     print(f"   Random msg chance    : 1 in {cfg['RANDOM_MESSAGE_CHANCE']}")
     print(f"   Chicken-out timeout  : {cfg['CHICKEN_OUT_TIMEOUT']}s")
     print(f"   Random messages      : {'✅' if cfg['ENABLE_RANDOM_MESSAGES'] else '❌'}")
@@ -1306,7 +1350,7 @@ if __name__ == "__main__":
     print(f"   LLM                  : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
     print(f"   Context messages     : last {cfg['LLM_CONTEXT_MESSAGES']} channel msgs per response")
     print(f"   Logging              : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
-    print(f"   Shitpost             : {'✅ every ' + str(cfg['SHITPOST_INTERVAL_MINUTES']) + ' min → ch ' + str(cfg['SHITPOST_CHANNEL_ID']) if cfg['ENABLE_SHITPOST'] else '❌ disabled'}")
+    print(f"   Shitpost             : {'✅ every ' + str(cfg['SHITPOST_INTERVAL_MINUTES']) + ' min - ch ' + str(cfg['SHITPOST_CHANNEL_ID']) if cfg['ENABLE_SHITPOST'] else '❌ disabled'}")
     if cfg["ENABLE_LLM"]:
         pct = cfg["LLM_PERCENTAGE"]
         print(f"   LLM percentage       : {'✅ ' + str(cfg['LLM_PERCENTAGE_VALUE']) + '%' if pct else '❌ always answer'}")
