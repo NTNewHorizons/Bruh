@@ -54,6 +54,23 @@ CHICKEN_OUT_CHANNEL_ID=
 
 
 
+# --- Shitpost Channel ---
+# Channel where the bot periodically posts random garbage / LLM nonsense on its own
+SHITPOST_CHANNEL_ID=
+
+# Enable or disable the shitpost feature
+ENABLE_SHITPOST=false
+
+# How often (in minutes) the bot posts in the shitpost channel
+SHITPOST_INTERVAL_MINUTES=60
+
+# Extra system-prompt text appended to LLM_SYSTEM_PROMPT ONLY for shitpost channel posts.
+# Use this to make the LLM extra unhinged when posting on its own.
+# Example: Go completely off the rails. Post memes, schizo rants, or chaotic hot takes.
+SHITPOST_LLM_EXTRA_PROMPT=Write ONE shitpost. No intro, no warm-up, just the post. Examples of good posts: "PISS" | "I don't give a fuck what you think. I'll post random shit anyway." | "Had a date, went to her place, she opened the door... then I woke up. Bruh." | "deep your balls in sulfuric acid RIGHT NOW" | "why does my elbow smell like soup" | "my uncle once ate 14 hotdogs and tried to fight a seagull. he lost." | "nothing matters. go to sleep." — Now write ONE new post in this style. Different from all examples. Random length. Raw output only, nothing else.
+
+
+
 # --- Role IDs ---
 #Role to ping when a new suggestion is posted
 SUGGESTION_PING_ROLE_ID=
@@ -193,12 +210,13 @@ def load_config() -> dict:
         "CHICKEN_OUT_CHANNEL_ID", "SUGGESTION_PING_ROLE_ID", "AUTHORIZED_USER_ID",
         "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT", "LLM_MAX_TOKENS", "LLM_TIMEOUT",
         "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE", "LLM_CONTEXT_MESSAGES",
+        "SHITPOST_CHANNEL_ID", "SHITPOST_INTERVAL_MINUTES",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
         "ENABLE_CHICKEN_OUT", "ENABLE_SUGGESTIONS", "ENABLE_RAPE_COMMAND",
         "ENABLE_LLM", "LLM_FALLBACK_ON_ERROR", "LLM_TYPING_INDICATOR",
-        "LLM_PERCENTAGE", "ENABLE_LOGGING",
+        "LLM_PERCENTAGE", "ENABLE_LOGGING", "ENABLE_SHITPOST",
     }
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -271,6 +289,10 @@ def load_config() -> dict:
     config.setdefault("ENABLE_LOGGING", True)
     config.setdefault("LOG_DIR", "logs")
     config.setdefault("LOG_FILE", "chat.log")
+    config.setdefault("ENABLE_SHITPOST", False)
+    config.setdefault("SHITPOST_CHANNEL_ID", 0)
+    config.setdefault("SHITPOST_INTERVAL_MINUTES", 60)
+    config.setdefault("SHITPOST_LLM_EXTRA_PROMPT", "")
 
     # Clamp percentage value
     if not (0 <= config["LLM_PERCENTAGE_VALUE"] <= 100):
@@ -346,24 +368,23 @@ def log(level: str, text: str):
 
 async def fetch_channel_context(
     channel: discord.TextChannel,
-    current_message: discord.Message,
+    current_message: discord.Message | None,
     bot_user: discord.ClientUser,
     limit: int = 20,
 ) -> list[dict]:
     """
     Fetch the last `limit` messages from the channel (excluding the current
-    one) and return them as a list of {role, content} dicts suitable for
-    passing directly to any LLM.
-
-    Bot messages  → role "assistant"
-    Everyone else → role "user", prefixed with [DisplayName] so the LLM
-                    knows who is talking in a multi-user chat.
+    one if provided) and return them as a list of {role, content} dicts.
+    Pass current_message=None to fetch the very latest messages (used by shitpost loop).
     """
     if limit <= 0:
         return []
 
     raw: list[discord.Message] = []
-    async for msg in channel.history(limit=limit, before=current_message):
+    kwargs = {"limit": limit}
+    if current_message is not None:
+        kwargs["before"] = current_message
+    async for msg in channel.history(**kwargs):
         if msg.content:          # skip embeds-only / attachment-only messages
             raw.append(msg)
 
@@ -464,14 +485,17 @@ def get_mention_text(message: discord.Message, bot_user: discord.ClientUser) -> 
 
 # ── LLM provider helpers ──────────────────────────────────────────────────
 
-def _build_messages(prompt: str, user_identity: str, history: list[dict]) -> list[dict]:
+def _build_messages(prompt: str, user_identity: str, history: list[dict],
+                    extra_system_prompt: str = "") -> list[dict]:
     """
     Build the standard messages array (system + channel history + new user turn).
     `history` is the pre-fetched channel context from fetch_channel_context().
     The current user's message is appended last so it is always answered.
+    `extra_system_prompt` is appended to the system prompt when supplied (e.g. for shitpost mode).
     """
     system_prompt = (
         cfg["LLM_SYSTEM_PROMPT"]
+        + (f"\n\n{extra_system_prompt}" if extra_system_prompt else "")
         + f"\n\nYou are participating in a group Discord chat. Multiple people may talk to you."
         + f"\nThe person currently addressing you is: {user_identity}"
         + f"\nWhen you see messages prefixed with [Name]:, those are other members of the chat."
@@ -589,24 +613,15 @@ async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession) ->
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
-async def query_llm(prompt: str, user_identity: str, history: list[dict]) -> str | None:
+async def query_llm(prompt: str, user_identity: str, history: list[dict],
+                    extra_system_prompt: str = "") -> str | None:
     """
     Dispatch to the correct LLM provider based on LLM_PROVIDER config.
-
-    Supported providers:
-      ollama        - local Ollama server
-      openai        - OpenAI API  (gpt-4o, gpt-4o-mini, …)
-      anthropic     - Anthropic Claude
-      lmstudio      - LM Studio local server (OpenAI-compatible)
-      groq          - Groq cloud  (OpenAI-compatible)
-      openrouter    - OpenRouter.ai  (OpenAI-compatible)
-      gemini        - Google Gemini
-      openai_compat - Any other OpenAI-compatible endpoint
-
-    Returns the model's reply as a string, or None on failure.
+    `extra_system_prompt` is appended to the system prompt when supplied.
+    ...
     """
     provider = cfg.get("LLM_PROVIDER", "ollama").lower()
-    messages  = _build_messages(prompt, user_identity, history)
+    messages  = _build_messages(prompt, user_identity, history, extra_system_prompt)
 
     try:
         timeout = aiohttp.ClientTimeout(total=cfg["LLM_TIMEOUT"])
@@ -767,6 +782,91 @@ async def post_suggestion(interaction: discord.Interaction, content: str,
     await interaction.response.send_message("✅ Suggestion submitted!", ephemeral=True)
 
 
+from discord.ext import tasks
+
+
+# ============================================================
+# SHITPOST LOOP
+# ============================================================
+
+@tasks.loop(minutes=1)   # actual interval is set dynamically in on_ready
+async def shitpost_loop():
+    """Periodically drop a random post in the shitpost channel."""
+    if not cfg["ENABLE_SHITPOST"]:
+        return
+
+    channel = bot.get_channel(cfg["SHITPOST_CHANNEL_ID"])
+    if not channel:
+        print(f"⚠️  Shitpost channel not found (ID: {cfg['SHITPOST_CHANNEL_ID']}). Skipping.")
+        return
+
+    # 3 possible post types: default_msg, mention_msg, LLM
+    choices = ["default", "mention", "llm"]
+
+    # If LLM is disabled, remove it from the pool
+    if not cfg["ENABLE_LLM"]:
+        choices.remove("llm")
+
+    # If message lists are empty, skip those options
+    if not msgs.default and "default" in choices:
+        choices.remove("default")
+    if not msgs.mention and "mention" in choices:
+        choices.remove("mention")
+
+    if not choices:
+        print("⚠️  Shitpost: no content available (empty message lists and LLM disabled).")
+        return
+
+    pick = random.choice(choices)
+    text = None
+
+    try:
+        if pick == "default":
+            text = random.choice(msgs.default)
+
+        elif pick == "mention":
+            text = random.choice(msgs.mention)
+
+        elif pick == "llm":
+            extra_prompt = cfg.get("SHITPOST_LLM_EXTRA_PROMPT", "").strip()
+            # Build a self-prompted post: the "user" turn tells the bot to just say something
+            shitpost_trigger = "Post something random right now. No context. Just go."
+            history = await fetch_channel_context(channel, None, bot.user,
+                                                  limit=cfg.get("LLM_CONTEXT_MESSAGES", 20))
+            if cfg["LLM_TYPING_INDICATOR"]:
+                async with channel.typing():
+                    text = await query_llm(shitpost_trigger, "Bruh", history,
+                                           extra_system_prompt=extra_prompt)
+            else:
+                text = await query_llm(shitpost_trigger, "Bruh", history,
+                                       extra_system_prompt=extra_prompt)
+
+            if not text:
+                # LLM failed — fall back to a random message if available
+                fallback_pool = [m for lst in [msgs.default, msgs.mention] for m in lst]
+                if fallback_pool:
+                    text = random.choice(fallback_pool)
+                    pick = "llm-fallback"
+
+        if text:
+            if len(text) > 1990:
+                text = text[:1990] + "…"
+            await channel.send(text)
+            log("info", f"[SHITPOST/{pick.upper()}] #{channel} | BOT → {text!r}")
+            short = repr(text)[:80]
+            print(f"💩 Shitpost ({pick}) → #{channel}: {short}")
+
+    except discord.Forbidden:
+        print(f"❌ Shitpost: no permission to send in #{channel}.")
+    except Exception as e:
+        print(f"❌ Shitpost error: {e}")
+
+
+@shitpost_loop.before_loop
+async def before_shitpost_loop():
+    await bot.wait_until_ready()
+
+
 # ============================================================
 # EVENTS
 # ============================================================
@@ -784,6 +884,18 @@ async def on_ready():
         print("🔄 Slash commands synced.")
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
+
+    # --- Shitpost loop ---
+    if cfg["ENABLE_SHITPOST"]:
+        interval = max(1, cfg["SHITPOST_INTERVAL_MINUTES"])
+        shitpost_loop.change_interval(minutes=interval)
+        if not shitpost_loop.is_running():
+            shitpost_loop.start()
+        extra = cfg.get("SHITPOST_LLM_EXTRA_PROMPT", "").strip()
+        print(f"   Shitpost     : ✅ every {interval} min → channel {cfg['SHITPOST_CHANNEL_ID']}")
+        print(f"   Shitpost LLM extra prompt: {'✅ set' if extra else 'ℹ️  none'}")
+    else:
+        print(f"   Shitpost     : ❌ disabled")
 
 
 @bot.event
@@ -1190,6 +1302,7 @@ if __name__ == "__main__":
     print(f"   LLM                  : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
     print(f"   Context messages     : last {cfg['LLM_CONTEXT_MESSAGES']} channel msgs per response")
     print(f"   Logging              : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
+    print(f"   Shitpost             : {'✅ every ' + str(cfg['SHITPOST_INTERVAL_MINUTES']) + ' min → ch ' + str(cfg['SHITPOST_CHANNEL_ID']) if cfg['ENABLE_SHITPOST'] else '❌ disabled'}")
     if cfg["ENABLE_LLM"]:
         pct = cfg["LLM_PERCENTAGE"]
         print(f"   LLM percentage       : {'✅ ' + str(cfg['LLM_PERCENTAGE_VALUE']) + '%' if pct else '❌ always answer'}")
