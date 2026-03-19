@@ -765,26 +765,23 @@ from discord.ext import tasks
 
 async def fix_duplicate_commands():
     """
-    Automatically detect and fix duplicate commands.
+    Detect duplicate commands between global and guild scopes and report them.
 
-    Discord stores global and guild commands separately. Duplicates appear when
-    the same command was previously synced both globally AND to the guild.
-    This function checks for overlap and wipes the correct scope to fix it.
-
-    Strategy:
-      - "Suggest message" (APP context menu) - must be GLOBAL only
-      - All other commands - must be GUILD only (if GUILD_ID is set)
-      - Any command that exists in both scopes is a duplicate - remove from wrong scope
+    NOTE: clear_commands() is NOT a coroutine — it only modifies the local tree.
+    The actual fix is done by the sync() calls in on_ready(), which perform a
+    full REPLACEMENT of each scope with the correct local tree contents:
+      - bot.tree.sync()         → global scope gets only "Suggest message"
+      - bot.tree.sync(guild=..) → guild scope gets all other commands
+    So duplicates are corrected automatically without any manual clearing here.
     """
     if _GUILD is None:
-        # No guild configured - everything is global, nothing to deduplicate
         return
 
     print("🔍 Checking for duplicate commands...")
 
     try:
-        global_commands  = await bot.tree.fetch_commands()                  # global
-        guild_commands   = await bot.tree.fetch_commands(guild=_GUILD)      # guild
+        global_commands = await bot.tree.fetch_commands()
+        guild_commands  = await bot.tree.fetch_commands(guild=_GUILD)
     except Exception as e:
         print(f"⚠️  Could not fetch commands for dedup check: {e}")
         return
@@ -792,43 +789,20 @@ async def fix_duplicate_commands():
     global_names = {c.name for c in global_commands}
     guild_names  = {c.name for c in guild_commands}
 
-    # Names that should ONLY be global
-    GLOBAL_ONLY  = {"Suggest message"}
-    # Names that should ONLY be in the guild (everything else registered by this bot)
-    GUILD_ONLY   = guild_names | global_names - GLOBAL_ONLY
+    # "Suggest message" must live globally; everything else must live in the guild
+    GLOBAL_ONLY = {"Suggest message"}
 
-    duplicates_found = False
+    leaked_to_guild  = GLOBAL_ONLY & guild_names          # global-only cmd found in guild
+    leaked_to_global = global_names - GLOBAL_ONLY         # guild cmd found in global
 
-    # 1. Any GLOBAL_ONLY command that leaked into guild scope - remove from guild
-    leaked_to_guild = GLOBAL_ONLY & guild_names
-    if leaked_to_guild:
-        print(f"⚠️  Found guild-scope duplicates of global commands: {leaked_to_guild}")
-        duplicates_found = True
-
-    # 2. Any GUILD_ONLY command that leaked into global scope - remove from global
-    leaked_to_global = (GUILD_ONLY - GLOBAL_ONLY) & global_names
-    if leaked_to_global:
-        print(f"⚠️  Found global-scope duplicates of guild commands: {leaked_to_global}")
-        duplicates_found = True
-
-    if not duplicates_found:
+    if leaked_to_guild or leaked_to_global:
+        if leaked_to_guild:
+            print(f"⚠️  In guild scope but should be global only : {leaked_to_guild}")
+        if leaked_to_global:
+            print(f"⚠️  In global scope but should be guild only : {leaked_to_global}")
+        print("🔧 Duplicates detected — the sync() calls below will correct this automatically.")
+    else:
         print("✅ No duplicate commands found.")
-        return
-
-    print("🔧 Fixing duplicates - clearing and re-syncing commands...")
-
-    try:
-        # Clear and re-sync global scope (keep only GLOBAL_ONLY commands)
-        await bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()
-
-        # Clear and re-sync guild scope (keep only GUILD_ONLY commands)
-        await bot.tree.clear_commands(guild=_GUILD)
-        await bot.tree.sync(guild=_GUILD)
-
-        print("✅ Duplicate commands fixed and commands re-synced.")
-    except Exception as e:
-        print(f"❌ Failed to fix duplicate commands: {e}")
 
 
 # ============================================================
