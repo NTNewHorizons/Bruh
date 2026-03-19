@@ -11,6 +11,8 @@ import re
 import aiohttp
 import asyncio
 import logging
+import json
+from datetime import datetime, timezone
 from discord.ext import commands
 from discord import app_commands
 
@@ -107,6 +109,29 @@ ENABLE_AUTO_THREAD=false
 ENABLE_CHICKEN_OUT=true
 ENABLE_SUGGESTIONS=true
 ENABLE_RAPE_COMMAND=false
+
+
+
+# --- Birthday Announcements ---
+# Enable or disable birthday announcements
+ENABLE_BIRTHDAYS=false
+
+# Channel to send birthday announcements in
+BIRTHDAY_CHANNEL_ID=
+
+# Role IDs to ping on birthdays (comma-separated, e.g. 123456789,987654321)
+# Leave blank to ping nobody
+BIRTHDAY_PING_ROLES=
+
+# UTC hour (0-23) to send birthday announcements each day (default: 0 = midnight UTC)
+BIRTHDAY_CHECK_HOUR=0
+
+# Custom birthday message. Use {mention} for the user mention and {name} for their display name.
+# Example: Happy Birthday {mention}! Hope your day is awesome!
+BIRTHDAY_MESSAGE=Happy Birthday {name}!
+
+# File to store birthday data (relative to bot script directory)
+BIRTHDAY_DATA_FILE=birthday_data.json
 
 
 
@@ -216,12 +241,13 @@ def load_config() -> dict:
         "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT", "LLM_MAX_TOKENS", "LLM_TIMEOUT",
         "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE", "LLM_CONTEXT_MESSAGES",
         "SHITPOST_CHANNEL_ID", "SHITPOST_INTERVAL_MINUTES", "GUILD_ID",
+        "BIRTHDAY_CHANNEL_ID", "BIRTHDAY_CHECK_HOUR",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
         "ENABLE_CHICKEN_OUT", "ENABLE_SUGGESTIONS", "ENABLE_RAPE_COMMAND",
         "ENABLE_LLM", "LLM_FALLBACK_ON_ERROR", "LLM_TYPING_INDICATOR",
-        "LLM_PERCENTAGE", "ENABLE_LOGGING", "ENABLE_SHITPOST",
+        "LLM_PERCENTAGE", "ENABLE_LOGGING", "ENABLE_SHITPOST", "ENABLE_BIRTHDAYS",
     }
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -299,6 +325,13 @@ def load_config() -> dict:
     config.setdefault("SHITPOST_CHANNEL_ID", 0)
     config.setdefault("SHITPOST_INTERVAL_MINUTES", 60)
     config.setdefault("SHITPOST_LLM_EXTRA_PROMPT", "")
+    # Birthday defaults
+    config.setdefault("ENABLE_BIRTHDAYS", False)
+    config.setdefault("BIRTHDAY_CHANNEL_ID", 0)
+    config.setdefault("BIRTHDAY_PING_ROLES", "")
+    config.setdefault("BIRTHDAY_CHECK_HOUR", 0)
+    config.setdefault("BIRTHDAY_MESSAGE", "Happy Birthday {name}!")
+    config.setdefault("BIRTHDAY_DATA_FILE", "birthday_data.json")
 
     # Clamp percentage value
     if not (0 <= config["LLM_PERCENTAGE_VALUE"] <= 100):
@@ -309,13 +342,17 @@ def load_config() -> dict:
         print("❌ LLM_MEMORY_SIZE must be at least 1.")
         exit(1)
 
+    # Validate birthday check hour
+    if not (0 <= config["BIRTHDAY_CHECK_HOUR"] <= 23):
+        print("❌ BIRTHDAY_CHECK_HOUR must be between 0 and 23.")
+        exit(1)
+
     return config
 
 
 cfg = load_config()
 
 # Guild object used for guild-specific command registration (instant sync).
-# "Suggest message" context menu stays global; everything else is guild-only.
 _GUILD: discord.Object | None = discord.Object(id=cfg["GUILD_ID"]) if cfg.get("GUILD_ID") else None
 
 
@@ -333,7 +370,6 @@ def setup_logger() -> logging.Logger:
     logger = logging.getLogger("bruh_bot")
     logger.setLevel(logging.DEBUG)
 
-    # Avoid adding duplicate handlers on reload
     if logger.handlers:
         return logger
 
@@ -342,13 +378,11 @@ def setup_logger() -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # File handler - always UTF-8
     fh = logging.FileHandler(log_path, encoding="utf-8")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-    # Console handler - INFO and above
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
     ch.setFormatter(fmt)
@@ -378,10 +412,6 @@ async def fetch_channel_context(
     bot_user: discord.ClientUser,
     limit: int = 20,
 ) -> list[dict]:
-    """
-    Fetch the last `limit` messages from the channel (excluding the current
-    one if provided) and return them as a list of {role, content} dicts.
-    """
     if limit <= 0:
         return []
 
@@ -453,6 +483,76 @@ msgs = MessageLists()
 
 
 # ============================================================
+# BIRTHDAY STORE
+# ============================================================
+
+class BirthdayStore:
+    """Manages birthday data persisted in a JSON file.
+
+    Data format: { "user_id_str": {"month": int, "day": int} }
+    """
+
+    def __init__(self):
+        self.path = BOT_DIR / cfg["BIRTHDAY_DATA_FILE"]
+        self._data: dict[str, dict] = {}
+        self.load()
+
+    def load(self):
+        if self.path.exists():
+            try:
+                self._data = json.loads(self.path.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"⚠️  Could not load birthday data: {e}")
+                self._data = {}
+        else:
+            self._data = {}
+
+    def save(self):
+        self.path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+
+    def set(self, user_id: int, month: int, day: int):
+        self._data[str(user_id)] = {"month": month, "day": day}
+        self.save()
+
+    def remove(self, user_id: int) -> bool:
+        key = str(user_id)
+        if key in self._data:
+            del self._data[key]
+            self.save()
+            return True
+        return False
+
+    def get(self, user_id: int) -> dict | None:
+        return self._data.get(str(user_id))
+
+    def get_todays(self, month: int, day: int) -> list[int]:
+        """Return list of user IDs whose birthday is today (month/day)."""
+        return [
+            int(uid) for uid, bd in self._data.items()
+            if bd["month"] == month and bd["day"] == day
+        ]
+
+    def all(self) -> dict[str, dict]:
+        return dict(self._data)
+
+    @staticmethod
+    def validate_date(month: int, day: int) -> bool:
+        """Basic sanity check for month/day combos."""
+        if not (1 <= month <= 12):
+            return False
+        days_in_month = [0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        return 1 <= day <= days_in_month[month]
+
+    @staticmethod
+    def month_name(month: int) -> str:
+        return ["", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"][month]
+
+
+birthdays = BirthdayStore()
+
+
+# ============================================================
 # USER IDENTITY HELPERS
 # ============================================================
 
@@ -480,6 +580,19 @@ def get_mention_text(message: discord.Message, bot_user: discord.ClientUser) -> 
     content = message.content
     content = re.sub(rf"<@!?{bot_user.id}>", "", content).strip()
     return content
+
+
+def _parse_birthday_ping_roles() -> list[int]:
+    """Parse BIRTHDAY_PING_ROLES from config into a list of int IDs."""
+    raw = cfg.get("BIRTHDAY_PING_ROLES", "").strip()
+    if not raw:
+        return []
+    ids = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            ids.append(int(part))
+    return ids
 
 
 # ============================================================
@@ -648,6 +761,10 @@ bot = commands.Bot(command_prefix=cfg["COMMAND_PREFIX"], intents=intents)
 # Tracks recent joins for chicken-out detection: {member_id: join_timestamp}
 recent_joins: dict[int, discord.utils.datetime] = {}
 
+# Tracks which UTC dates we already announced birthdays for (prevents double-firing)
+# Format: "YYYY-MM-DD"
+_birthday_announced_dates: set[str] = set()
+
 
 # ============================================================
 # SUGGESTION VIEW
@@ -756,6 +873,61 @@ async def post_suggestion(interaction: discord.Interaction, content: str,
     await interaction.response.send_message("✅ Suggestion submitted!", ephemeral=True)
 
 
+async def send_birthday_announcements(guild: discord.Guild, month: int, day: int):
+    """Send birthday messages for all users whose birthday is today."""
+    channel = bot.get_channel(cfg["BIRTHDAY_CHANNEL_ID"])
+    if not channel:
+        print(f"⚠️  Birthday channel not found (ID: {cfg['BIRTHDAY_CHANNEL_ID']}). Skipping.")
+        return
+
+    birthday_user_ids = birthdays.get_todays(month, day)
+    if not birthday_user_ids:
+        return
+
+    # Build role ping prefix once
+    role_ids = _parse_birthday_ping_roles()
+    role_pings = " ".join(f"<@&{rid}>" for rid in role_ids) if role_ids else ""
+
+    for user_id in birthday_user_ids:
+        member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except (discord.NotFound, discord.HTTPException):
+                log("warning", f"[BIRTHDAY] Could not find member {user_id} in guild.")
+                continue
+
+        display_name = (
+            getattr(member, "nick", None)
+            or getattr(member, "global_name", None)
+            or member.display_name
+            or member.name
+        )
+
+        # Format the birthday message from config template
+        bday_text = cfg["BIRTHDAY_MESSAGE"].format(
+            mention=member.mention,
+            name=display_name,
+        )
+
+        # Build final message: role pings + user ping + birthday text
+        parts = []
+        if role_pings:
+            parts.append(role_pings)
+        parts.append(member.mention)
+        ping_line = " ".join(parts)
+
+        try:
+            await channel.send(ping_line)
+            await channel.send(bday_text)
+            log("info", f"[BIRTHDAY] Announced birthday for {member} ({user_id})")
+            print(f"🎂 Birthday announced for {member} in #{channel}")
+        except discord.Forbidden:
+            print(f"❌ Birthday: no permission to send in #{channel}.")
+        except Exception as e:
+            print(f"❌ Birthday send error for {user_id}: {e}")
+
+
 from discord.ext import tasks
 
 
@@ -764,16 +936,6 @@ from discord.ext import tasks
 # ============================================================
 
 async def fix_duplicate_commands():
-    """
-    Detect duplicate commands between global and guild scopes and report them.
-
-    NOTE: clear_commands() is NOT a coroutine — it only modifies the local tree.
-    The actual fix is done by the sync() calls in on_ready(), which perform a
-    full REPLACEMENT of each scope with the correct local tree contents:
-      - bot.tree.sync()         → global scope gets only "Suggest message"
-      - bot.tree.sync(guild=..) → guild scope gets all other commands
-    So duplicates are corrected automatically without any manual clearing here.
-    """
     if _GUILD is None:
         return
 
@@ -789,18 +951,17 @@ async def fix_duplicate_commands():
     global_names = {c.name for c in global_commands}
     guild_names  = {c.name for c in guild_commands}
 
-    # "Suggest message" must live globally; everything else must live in the guild
     GLOBAL_ONLY = {"Suggest message"}
 
-    leaked_to_guild  = GLOBAL_ONLY & guild_names          # global-only cmd found in guild
-    leaked_to_global = global_names - GLOBAL_ONLY         # guild cmd found in global
+    leaked_to_guild  = GLOBAL_ONLY & guild_names
+    leaked_to_global = global_names - GLOBAL_ONLY
 
     if leaked_to_guild or leaked_to_global:
         if leaked_to_guild:
             print(f"⚠️  In guild scope but should be global only : {leaked_to_guild}")
         if leaked_to_global:
             print(f"⚠️  In global scope but should be guild only : {leaked_to_global}")
-        print("🔧 Duplicates detected — the sync() calls below will correct this automatically.")
+        print("🔧 Duplicates detected - the sync() calls below will correct this automatically.")
     else:
         print("✅ No duplicate commands found.")
 
@@ -882,6 +1043,45 @@ async def before_shitpost_loop():
 
 
 # ============================================================
+# BIRTHDAY CHECK LOOP
+# ============================================================
+
+@tasks.loop(minutes=1)
+async def birthday_check_loop():
+    """Check once per day (at BIRTHDAY_CHECK_HOUR UTC) for birthdays."""
+    if not cfg["ENABLE_BIRTHDAYS"]:
+        return
+
+    now = datetime.now(timezone.utc)
+
+    # Only fire at the configured hour, on the :00 minute
+    if now.hour != cfg["BIRTHDAY_CHECK_HOUR"] or now.minute != 0:
+        return
+
+    date_key = now.strftime("%Y-%m-%d")
+    if date_key in _birthday_announced_dates:
+        return  # Already ran today
+    _birthday_announced_dates.add(date_key)
+
+    # Keep the set small - only keep the last 2 dates
+    if len(_birthday_announced_dates) > 2:
+        oldest = sorted(_birthday_announced_dates)[0]
+        _birthday_announced_dates.discard(oldest)
+
+    print(f"🎂 Running birthday check for {date_key} (month={now.month}, day={now.day})")
+    log("info", f"[BIRTHDAY] Daily check triggered for {date_key}")
+
+    # Run announcements in every guild the bot is in
+    for guild in bot.guilds:
+        await send_birthday_announcements(guild, now.month, now.day)
+
+
+@birthday_check_loop.before_loop
+async def before_birthday_check_loop():
+    await bot.wait_until_ready()
+
+
+# ============================================================
 # EVENTS
 # ============================================================
 
@@ -900,11 +1100,9 @@ async def on_ready():
 
     # ── Sync commands ────────────────────────────────────────────────────────
     try:
-        # Global sync - only registers "Suggest message" context menu (no guild=)
         synced_global = await bot.tree.sync()
 
         if _GUILD:
-            # Guild sync - registers all other commands instantly
             synced_guild = await bot.tree.sync(guild=_GUILD)
             print(f"🔄 Commands synced: {len(synced_global)} global, {len(synced_guild)} guild.")
         else:
@@ -924,6 +1122,19 @@ async def on_ready():
         print(f"   Shitpost LLM extra prompt: {'✅ set' if extra else 'ℹ️  none'}")
     else:
         print(f"   Shitpost     : ❌ disabled")
+
+    # ── Birthday loop ────────────────────────────────────────────────────────
+    if cfg["ENABLE_BIRTHDAYS"]:
+        if not birthday_check_loop.is_running():
+            birthday_check_loop.start()
+        role_ids = _parse_birthday_ping_roles()
+        roles_str = ", ".join(str(r) for r in role_ids) if role_ids else "none"
+        print(f"   Birthdays    : ✅ channel={cfg['BIRTHDAY_CHANNEL_ID']} | "
+              f"check hour={cfg['BIRTHDAY_CHECK_HOUR']}:00 UTC | "
+              f"ping roles=[{roles_str}] | "
+              f"registered={len(birthdays.all())}")
+    else:
+        print(f"   Birthdays    : ❌ disabled")
 
 
 @bot.event
@@ -1272,6 +1483,192 @@ async def llm_status(interaction: discord.Interaction):
 
 
 # ============================================================
+# BIRTHDAY SLASH COMMANDS  (guild-only)
+# ============================================================
+
+birthday_group = app_commands.Group(
+    name="birthday",
+    description="Birthday announcement commands",
+    guild_ids=[cfg["GUILD_ID"]] if cfg.get("GUILD_ID") else None,
+)
+
+
+@birthday_group.command(name="set", description="Set your birthday so the bot can announce it")
+@app_commands.describe(
+    month="Month number (1-12)",
+    day="Day of the month",
+)
+async def birthday_set(interaction: discord.Interaction, month: int, day: int):
+    if not cfg["ENABLE_BIRTHDAYS"]:
+        await interaction.response.send_message("❌ Birthdays are disabled.", ephemeral=True)
+        return
+
+    if not BirthdayStore.validate_date(month, day):
+        await interaction.response.send_message(
+            f"❌ Invalid date: {month}/{day}. Please use a real calendar date.", ephemeral=True
+        )
+        return
+
+    birthdays.set(interaction.user.id, month, day)
+    month_str = BirthdayStore.month_name(month)
+    await interaction.response.send_message(
+        f"🎂 Your birthday has been set to **{month_str} {day}**!", ephemeral=True
+    )
+    log("info", f"[BIRTHDAY-SET] {interaction.user} ({interaction.user.id}) set birthday to {month}/{day}")
+
+
+@birthday_group.command(name="remove", description="Remove your birthday from the bot")
+async def birthday_remove(interaction: discord.Interaction):
+    if not cfg["ENABLE_BIRTHDAYS"]:
+        await interaction.response.send_message("❌ Birthdays are disabled.", ephemeral=True)
+        return
+
+    removed = birthdays.remove(interaction.user.id)
+    if removed:
+        await interaction.response.send_message("✅ Your birthday has been removed.", ephemeral=True)
+        log("info", f"[BIRTHDAY-REMOVE] {interaction.user} ({interaction.user.id}) removed birthday")
+    else:
+        await interaction.response.send_message("ℹ️ You didn't have a birthday set.", ephemeral=True)
+
+
+@birthday_group.command(name="check", description="See your currently saved birthday")
+async def birthday_check(interaction: discord.Interaction):
+    if not cfg["ENABLE_BIRTHDAYS"]:
+        await interaction.response.send_message("❌ Birthdays are disabled.", ephemeral=True)
+        return
+
+    bd = birthdays.get(interaction.user.id)
+    if bd:
+        month_str = BirthdayStore.month_name(bd["month"])
+        await interaction.response.send_message(
+            f"🎂 Your birthday is set to **{month_str} {bd['day']}**.", ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            "ℹ️ You have no birthday set. Use `/birthday set` to add one!", ephemeral=True
+        )
+
+
+@birthday_group.command(name="list", description="List all registered birthdays (admin only)")
+@app_commands.default_permissions(administrator=True)
+async def birthday_list(interaction: discord.Interaction):
+    if not cfg["ENABLE_BIRTHDAYS"]:
+        await interaction.response.send_message("❌ Birthdays are disabled.", ephemeral=True)
+        return
+
+    all_bdays = birthdays.all()
+    if not all_bdays:
+        await interaction.response.send_message("📭 No birthdays registered yet.", ephemeral=True)
+        return
+
+    # Sort by month then day
+    sorted_bdays = sorted(all_bdays.items(), key=lambda x: (x[1]["month"], x[1]["day"]))
+
+    lines = []
+    for uid_str, bd in sorted_bdays:
+        month_str = BirthdayStore.month_name(bd["month"])
+        member = interaction.guild.get_member(int(uid_str))
+        name = member.display_name if member else f"Unknown ({uid_str})"
+        lines.append(f"**{name}** - {month_str} {bd['day']}")
+
+    # Split into chunks if needed (Discord 2000 char limit)
+    chunks: list[str] = []
+    current = f"🎂 **Registered Birthdays ({len(sorted_bdays)}):**\n"
+    for line in lines:
+        if len(current) + len(line) + 1 > 1900:
+            chunks.append(current)
+            current = ""
+        current += line + "\n"
+    if current:
+        chunks.append(current)
+
+    await interaction.response.send_message(chunks[0], ephemeral=True)
+    for chunk in chunks[1:]:
+        await interaction.followup.send(chunk, ephemeral=True)
+
+
+@birthday_group.command(
+    name="announce-test",
+    description="Trigger a test birthday announcement for a user (admin only)"
+)
+@app_commands.describe(member="The member to announce (defaults to yourself)")
+@app_commands.default_permissions(administrator=True)
+async def birthday_announce_test(
+    interaction: discord.Interaction,
+    member: discord.Member | None = None,
+):
+    if not cfg["ENABLE_BIRTHDAYS"]:
+        await interaction.response.send_message("❌ Birthdays are disabled.", ephemeral=True)
+        return
+
+    target = member or interaction.user
+    channel = bot.get_channel(cfg["BIRTHDAY_CHANNEL_ID"])
+    if not channel:
+        await interaction.response.send_message(
+            f"❌ Birthday channel not found (ID: `{cfg['BIRTHDAY_CHANNEL_ID']}`). "
+            "Set `BIRTHDAY_CHANNEL_ID` in config.txt.", ephemeral=True
+        )
+        return
+
+    display_name = (
+        getattr(target, "nick", None)
+        or getattr(target, "global_name", None)
+        or target.display_name
+        or target.name
+    )
+
+    role_ids = _parse_birthday_ping_roles()
+    role_pings = " ".join(f"<@&{rid}>" for rid in role_ids) if role_ids else ""
+    bday_text = cfg["BIRTHDAY_MESSAGE"].format(mention=target.mention, name=display_name)
+
+    parts = []
+    if role_pings:
+        parts.append(role_pings)
+    parts.append(target.mention)
+    ping_line = " ".join(parts)
+
+    try:
+        await channel.send(ping_line)
+        await channel.send(bday_text)
+        await interaction.response.send_message(
+            f"✅ Test announcement sent for {target.mention} in <#{channel.id}>.", ephemeral=True
+        )
+        log("info", f"[BIRTHDAY-TEST] {interaction.user} triggered test for {target} ({target.id})")
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            f"❌ No permission to send in <#{channel.id}>.", ephemeral=True
+        )
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+
+@birthday_group.command(
+    name="remove-user",
+    description="Remove another user's birthday (admin only)"
+)
+@app_commands.describe(member="The member whose birthday to remove")
+@app_commands.default_permissions(administrator=True)
+async def birthday_remove_user(interaction: discord.Interaction, member: discord.Member):
+    if not cfg["ENABLE_BIRTHDAYS"]:
+        await interaction.response.send_message("❌ Birthdays are disabled.", ephemeral=True)
+        return
+
+    removed = birthdays.remove(member.id)
+    if removed:
+        await interaction.response.send_message(
+            f"✅ Removed birthday for {member.mention}.", ephemeral=True
+        )
+        log("info", f"[BIRTHDAY-REMOVE-ADMIN] {interaction.user} removed birthday for {member} ({member.id})")
+    else:
+        await interaction.response.send_message(
+            f"ℹ️ {member.mention} had no birthday set.", ephemeral=True
+        )
+
+
+bot.tree.add_command(birthday_group)
+
+
+# ============================================================
 # CONTEXT MENU COMMANDS
 # ============================================================
 
@@ -1330,6 +1727,13 @@ if __name__ == "__main__":
         print(f"   LLM percentage       : {'✅ ' + str(cfg['LLM_PERCENTAGE_VALUE']) + '%' if pct else '❌ always answer'}")
         fallback_msg = cfg.get("LLM_FALLBACK_MSG", "").strip()
         print(f"   LLM fallback msg     : {'✅ custom' if fallback_msg else 'ℹ️  random mention_msg'}")
+    if cfg["ENABLE_BIRTHDAYS"]:
+        role_ids = _parse_birthday_ping_roles()
+        print(f"   Birthdays            : ✅ ch={cfg['BIRTHDAY_CHANNEL_ID']} | "
+              f"hour={cfg['BIRTHDAY_CHECK_HOUR']}:00 UTC | "
+              f"roles={role_ids or 'none'}")
+    else:
+        print(f"   Birthdays            : ❌ disabled")
 
     try:
         bot.run(cfg["TOKEN"])

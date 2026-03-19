@@ -60,9 +60,9 @@ Its core purpose is to add personality to a Discord server: it fires off random 
 
 ## 2. Requirements
 
-- **Python 3.10 or later** — required for the `X | Y` type union syntax used throughout the code.
-- **discord.py 2.x** — the async Discord library.
-- **A Discord Bot Token** — from the [Discord Developer Portal](https://discord.com/developers/applications).
+- **Python 3.10 or later** - required for the `X | Y` type union syntax used throughout the code.
+- **discord.py 2.x** - the async Discord library.
+- **A Discord Bot Token** - from the [Discord Developer Portal](https://discord.com/developers/applications).
 - The bot needs the **MESSAGE CONTENT** and **SERVER MEMBERS** Privileged Gateway Intents enabled in the Developer Portal.
 
 > **⚠️ Important:** Privileged intents must be turned **ON** in the Developer Portal under **Bot → Privileged Gateway Intents**, otherwise the bot will fail to start.
@@ -84,7 +84,7 @@ pip install discord.py
 
 ### Generate config
 
-Run the bot once with no `config.txt` present — it will create a template and exit:
+Run the bot once with no `config.txt` present - it will create a template and exit:
 
 ```bash
 python bot.py
@@ -100,8 +100,8 @@ Output:
 
 Open `config.txt` and fill in at minimum:
 
-- `TOKEN` — your bot token.
-- `AUTHORIZED_USER_ID` — your Discord user ID (right-click your name → Copy User ID with Developer Mode on).
+- `TOKEN` - your bot token.
+- `AUTHORIZED_USER_ID` - your Discord user ID (right-click your name → Copy User ID with Developer Mode on).
 - Any channel/role IDs for the features you want to enable.
 
 ### Start the bot
@@ -215,8 +215,8 @@ Additional keys control AI behaviour when `ENABLE_LLM` is enabled:
 
 The bot reads two plain-text files at startup. If they do not exist they are created as empty files automatically.
 
-- `default_msgs.txt` — messages sent randomly to any channel.
-- `mention_msgs.txt` — messages sent when the bot is @mentioned (used as fallback when LLM is disabled or fails).
+- `default_msgs.txt` - messages sent randomly to any channel.
+- `mention_msgs.txt` - messages sent when the bot is @mentioned (used as fallback when LLM is disabled or fails).
 
 ```
 # default_msgs.txt example
@@ -341,10 +341,10 @@ A bare `@Bruh` ping with no text always uses `mention_msgs.txt` and never hits t
 
 The bot does **not** maintain a private per-user conversation history. Instead, every time it is triggered, it fetches the last `LLM_CONTEXT_MESSAGES` real messages from the channel and passes them to the LLM as context. This design has several advantages:
 
-- **Survives restarts** — Discord stores the messages, not the bot. Rebooting the bot loses nothing.
-- **Full group-chat awareness** — the bot sees what everyone said, not just the person who pinged it. It can reference other users' messages naturally.
-- **No memory leaks** — there are no in-process dicts that grow forever.
-- **No `/clear-memory` needed** — context is always the live channel, so it's always fresh.
+- **Survives restarts** - Discord stores the messages, not the bot. Rebooting the bot loses nothing.
+- **Full group-chat awareness** - the bot sees what everyone said, not just the person who pinged it. It can reference other users' messages naturally.
+- **No memory leaks** - there are no in-process dicts that grow forever.
+- **No `/clear-memory` needed** - context is always the live channel, so it's always fresh.
 
 Messages from other users are prefixed with `[Name]:` in the context, so the LLM knows who is speaking. Bot messages are passed as `assistant` turns.
 
@@ -371,10 +371,10 @@ Bruh:     The tomato one? It's still in the chat, I can see it. Not Pulitzer mat
 
 #### Other LLM behaviours
 
-- A bare `@Bruh` ping with no text always falls back to a random line from `mention_msgs.txt` — the LLM is never called.
+- A bare `@Bruh` ping with no text always falls back to a random line from `mention_msgs.txt` - the LLM is never called.
 - Set `LLM_PERCENTAGE=true` and `LLM_PERCENTAGE_VALUE` to make the bot only respond some of the time.
 - If the LLM fails or times out and `LLM_FALLBACK_ON_ERROR=true`, a random mention message (or `LLM_FALLBACK_MSG` if set) is sent instead of an error.
-- The system prompt is pre-configured to enforce single-voice output — the bot only ever speaks as itself and never simulates other users or writes dialogue on their behalf.
+- The system prompt is pre-configured to enforce single-voice output - the bot only ever speaks as itself and never simulates other users or writes dialogue on their behalf.
 
 > **⚠️** LLM integration requires network access to the provider and may incur usage costs. Test connectivity with `/llm-status` and watch the logs in `logs/` if enabled.
 
@@ -428,8 +428,8 @@ logs/                   ← conversation and error logs (if enabled)
 | Slash commands not showing up | They can take up to an hour to propagate globally. Re-invite the bot or wait. |
 | Suggestions not posting | Ensure `SUGGESTION_CHANNEL_ID` and `SUGGESTION_PING_ROLE_ID` are set and the bot has Send Messages permission there. |
 | Auto-thread silently failing | The bot needs **Manage Threads** + **Add Reactions** in `AUTO_THREAD_CHANNEL_ID`. Check channel permission overrides. |
-| Bot responds to its own messages | Should not happen — the `on_message` guard returns early for `bot.user`. Check for other bots forwarding messages. |
-| Chicken out fires on restart | By design — the in-memory join log is cleared on restart. Pre-restart members are not tracked. |
+| Bot responds to its own messages | Should not happen - the `on_message` guard returns early for `bot.user`. Check for other bots forwarding messages. |
+| Chicken out fires on restart | By design - the in-memory join log is cleared on restart. Pre-restart members are not tracked. |
 | !hbm returns "file not found" | Create the `misc/` folder next to `bot.py` and put `hbm.png` inside it. |
 | LLM messages not working | Verify `ENABLE_LLM`, provider settings, and that the service is reachable (`/llm-status`). Check network/firewall. |
 | Bot seems unaware of past messages | Increase `LLM_CONTEXT_MESSAGES` in `config.txt`. The default is `20`. |
