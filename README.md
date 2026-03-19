@@ -33,6 +33,7 @@
    - [6.6 Chicken Out Detection](#66-chicken-out-detection)
    - [6.7 !hbm Command](#67-hbm-command)
    - [6.8 LLM Responses](#68-llm-responses)
+   - [6.9 Birthday Announcements](#69-birthday-announcements)
 7. [Commands Reference](#7-commands-reference)
 8. [Folder Structure](#8-folder-structure)
 9. [Troubleshooting](#9-troubleshooting)
@@ -55,6 +56,7 @@ Its core purpose is to add personality to a Discord server: it fires off random 
 | Chicken Out | Detects members who leave shortly after joining and posts a gif | `ENABLE_CHICKEN_OUT` |
 | !hbm | Sends `misc/hbm.png` to the current channel | *(prefix command)* |
 | **LLM Responses** | Bot replies with AI-generated text when mentioned, with full group chat awareness | `ENABLE_LLM` |
+| **Birthday Announcements** | Announces member birthdays daily in a chosen channel and pings configurable roles | `ENABLE_BIRTHDAYS` |
 
 ---
 
@@ -176,6 +178,7 @@ All toggles accept `true` or `false`.
 | `ENABLE_SUGGESTIONS` | `true` |
 | `ENABLE_RAPE_COMMAND` | `false` |
 | `ENABLE_LLM` | `false` |
+| `ENABLE_BIRTHDAYS` | `false` |
 
 ---
 
@@ -200,6 +203,22 @@ Additional keys control AI behaviour when `ENABLE_LLM` is enabled:
 | `LLM_CONTEXT_MESSAGES` | How many recent channel messages to read as context. Default: `20`. |
 
 > **ℹ️ On memory:** The bot no longer keeps a private per-user history. Instead it reads the last `LLM_CONTEXT_MESSAGES` real Discord messages from the channel before every response. This means context survives bot restarts automatically and includes messages from all users in the chat, giving the bot full group-chat awareness. See [6.8 LLM Responses](#68-llm-responses) for details.
+
+---
+
+### Birthday Configuration
+
+Additional keys control birthday announcements when `ENABLE_BIRTHDAYS` is enabled:
+
+| Key | Description |
+|---|---|
+| `BIRTHDAY_CHANNEL_ID` | Channel where birthday announcements are posted. |
+| `BIRTHDAY_PING_ROLES` | Comma-separated role IDs to ping on each announcement (e.g. `123456,789012`). Leave blank to ping nobody. |
+| `BIRTHDAY_CHECK_HOUR` | UTC hour (0–23) at which the daily birthday check fires. Default: `0` (midnight UTC). |
+| `BIRTHDAY_MESSAGE` | Template for the birthday message. Use `{mention}` for the user's @mention and `{name}` for their display name. Default: `Happy Birthday {name}!` |
+| `BIRTHDAY_DATA_FILE` | Filename for the birthday JSON store. Default: `birthday_data.json` |
+
+---
 
 ### Logging Configuration
 
@@ -380,6 +399,47 @@ Bruh:     The tomato one? It's still in the chat, I can see it. Not Pulitzer mat
 
 ---
 
+### 6.9 Birthday Announcements
+
+When `ENABLE_BIRTHDAYS=true`, the bot checks for birthdays once per day at the configured UTC hour and posts an announcement in `BIRTHDAY_CHANNEL_ID` for every member who has a birthday that day.
+
+#### How it works
+
+- Members register their birthday themselves using `/birthday set <month> <day>`. Only the month and day are stored — no year is ever collected.
+- Each day at `BIRTHDAY_CHECK_HOUR` (UTC), the bot scans the birthday store and announces any matches.
+- Birthdays are persisted in `birthday_data.json` next to `bot.py`, so they survive restarts.
+- The announcement pings the configured roles (if any), mentions the birthday member, then sends the birthday message.
+
+#### Announcement format
+
+Given these settings:
+
+```
+BIRTHDAY_PING_ROLES=111222333,444555666
+BIRTHDAY_MESSAGE=Happy Birthday {name}! 🎂
+```
+
+The bot sends two messages to the birthday channel:
+
+```
+@RoleOne @RoleTwo @SomeMember
+Happy Birthday SomeMember! 🎂
+```
+
+The `{mention}` and `{name}` placeholders in `BIRTHDAY_MESSAGE` are replaced with the member's @mention and display name respectively. You can use both, either, or neither.
+
+#### Quick setup
+
+1. Set `ENABLE_BIRTHDAYS=true` in `config.txt`.
+2. Set `BIRTHDAY_CHANNEL_ID` to the channel where announcements should appear.
+3. Optionally set `BIRTHDAY_PING_ROLES` to one or more role IDs (comma-separated).
+4. Ask members to run `/birthday set` to register their birthday.
+5. Use `/birthday announce-test` to verify the channel, message, and role pings look correct before waiting for midnight.
+
+> **ℹ️ Timezone note:** `BIRTHDAY_CHECK_HOUR` is always UTC. If your server community is in UTC+3 and you want announcements at noon local time, set `BIRTHDAY_CHECK_HOUR=9`.
+
+---
+
 ## 7. Commands Reference
 
 ### Slash Commands
@@ -390,6 +450,12 @@ Bruh:     The tomato one? It's still in the chat, I can see it. Not Pulitzer mat
 | `/reload-msgs` | Administrator | Reload both message files from disk. |
 | `/clear-memory` | Everyone | Explains that memory is now the live channel history. |
 | `/llm-status` | Administrator | Check connectivity with the configured LLM provider. |
+| `/birthday set <month> <day>` | Everyone | Register your birthday (month and day only). |
+| `/birthday remove` | Everyone | Remove your birthday from the bot. |
+| `/birthday check` | Everyone | See your currently saved birthday. |
+| `/birthday list` | Administrator | List all registered birthdays sorted by date. |
+| `/birthday announce-test [member]` | Administrator | Fire a test birthday announcement immediately. |
+| `/birthday remove-user <member>` | Administrator | Remove another member's birthday. |
 
 ### Context Menu Commands *(right-click → Apps)*
 
@@ -413,6 +479,7 @@ bot.py                  ← main bot file (single file)
 config.txt              ← configuration (auto-generated on first run)
 default_msgs.txt        ← default random response messages
 mention_msgs.txt        ← mention response messages (LLM fallback)
+birthday_data.json      ← birthday store (auto-created when first birthday is set)
 misc/
 └── hbm.png             ← image used by !hbm command
 logs/                   ← conversation and error logs (if enabled)
@@ -435,3 +502,7 @@ logs/                   ← conversation and error logs (if enabled)
 | Bot seems unaware of past messages | Increase `LLM_CONTEXT_MESSAGES` in `config.txt`. The default is `20`. |
 | Bot responds to the wrong person | The LLM sees messages from all users in the context window. If the channel is very busy, increase `LLM_CONTEXT_MESSAGES` so the bot has more scroll-back to work from. |
 | Message not added after approval | The message may already be in the file. The button warns but will not duplicate. |
+| Birthday not announced | Verify `BIRTHDAY_CHANNEL_ID` is set, the bot has Send Messages permission there, and the member ran `/birthday set`. Use `/birthday announce-test` to test without waiting for midnight. |
+| Birthday announced at wrong time | `BIRTHDAY_CHECK_HOUR` is UTC. Adjust for your server's local timezone offset. |
+| Role not pinged on birthday | Ensure `BIRTHDAY_PING_ROLES` contains valid role IDs and the bot has **Mention All Roles** permission (or the roles are set to mentionable). |
+| `/birthday set` command missing | Ensure `GUILD_ID` is set in `config.txt` so guild-scoped commands sync instantly. |
