@@ -12,7 +12,7 @@ import aiohttp
 import asyncio
 import logging
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from discord.ext import commands
 from discord import app_commands
 
@@ -100,11 +100,27 @@ CHICKEN_OUT_TIMEOUT=900
 # Message/URL sent when someone chickens out
 CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063
 
+# How long (seconds) the bot stays "active" in a channel after being pinged,
+# responding without needing a new @mention. Set to 0 to disable.
+ATTENTION_WINDOW_SECONDS=300
+
+# Enable attention window + debounce mode.
+# true  = bot stays active in channel after a ping, responds without re-pinging
+# false = bot only responds to explicit @mentions (safer for busy servers)
+ENABLE_ATTENTION_WINDOW=false
+
+# How long (seconds) the bot waits after the last message before responding.
+# This allows users to send multiple messages in a burst before Bruh replies.
+# Set to 0 to disable (respond immediately to each message).
+LLM_DEBOUNCE_SECONDS=2
+
 
 
 # --- Feature Toggles ---
 ENABLE_RANDOM_MESSAGES=true
 ENABLE_MENTION_RESPONSES=true
+# Use Discord reply (threads message) instead of plain send
+ENABLE_REPLY_TO_MESSAGE=true
 ENABLE_AUTO_THREAD=false
 ENABLE_CHICKEN_OUT=true
 ENABLE_SUGGESTIONS=true
@@ -144,6 +160,7 @@ ENABLE_LLM=false
 # Provider selection
 # Supported values:
 #   ollama        - local Ollama server (default)
+#   ollama_cloud  - Ollama Cloud API (ollama.com) - requires LLM_API_KEY
 #   openai        - OpenAI (GPT-4o, GPT-4, GPT-3.5-turbo, ...)
 #   anthropic     - Anthropic Claude (claude-3-5-sonnet-20241022, ...)
 #   lmstudio      - LM Studio local server (OpenAI-compatible)
@@ -153,13 +170,15 @@ ENABLE_LLM=false
 #   openai_compat - Any OpenAI-compatible API (custom base URL + optional key)
 LLM_PROVIDER=ollama
 
-# API key - required for openai / anthropic / groq / openrouter / gemini.
+# API key - required for openai / anthropic / groq / openrouter / gemini / ollama_cloud.
 # Leave blank for ollama and lmstudio (no key needed).
+# For ollama_cloud: get your key at https://ollama.com/settings/keys
 LLM_API_KEY=
 
 # Base URL - auto-set per provider if left blank.
 # Override here if your server runs on a non-default address/port.
 #   ollama default   : http://localhost:11434
+#   ollama_cloud default: https://ollama.com
 #   lmstudio default : http://localhost:1234
 #   openai default   : https://api.openai.com
 #   anthropic default: https://api.anthropic.com
@@ -170,6 +189,7 @@ LLM_BASE_URL=
 
 # Model to use. Examples per provider:
 #   ollama      : mistral, llama3.2, gemma2 (run `ollama list`)
+#   ollama_cloud: gpt-oss:120b, deepseek-v3.2, qwen3.5:397b (see ollama.com/search)
 #   openai      : gpt-4o, gpt-4o-mini, gpt-3.5-turbo
 #   anthropic   : claude-3-5-sonnet-20241022, claude-3-haiku-20240307
 #   lmstudio    : (whatever model you loaded in LM Studio)
@@ -219,6 +239,27 @@ LOG_DIR=logs
 
 # Log file name
 LOG_FILE=chat.log
+
+
+
+# --- Voice Chat ---
+# Enable or disable the voice chat feature entirely
+ENABLE_VOICE=false
+
+# Folder containing sound files (.mp3, .ogg, .wav, .flac) for voice playback
+SOUNDS_FOLDER=sounds
+
+# Base interval (seconds) between sound playbacks
+VOICE_SOUND_INTERVAL_BASE=45
+
+# Variance (seconds) added/subtracted randomly from the base interval
+VOICE_SOUND_INTERVAL_VARIANCE=20
+
+# Enable random sound playback while in voice channel
+ENABLE_VOICE_SOUNDS=true
+
+# Seconds bot waits alone in voice before auto-disconnecting
+VOICE_ALONE_DISCONNECT_SECONDS=30
 """
 
 
@@ -241,13 +282,20 @@ def load_config() -> dict:
         "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT", "LLM_MAX_TOKENS", "LLM_TIMEOUT",
         "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE", "LLM_CONTEXT_MESSAGES",
         "SHITPOST_CHANNEL_ID", "SHITPOST_INTERVAL_MINUTES", "GUILD_ID",
-        "BIRTHDAY_CHANNEL_ID", "BIRTHDAY_CHECK_HOUR",
+        "BIRTHDAY_CHANNEL_ID", "BIRTHDAY_CHECK_HOUR", "ATTENTION_WINDOW_SECONDS",
+        "LLM_DEBOUNCE_SECONDS",
+        "VOICE_SOUND_INTERVAL_BASE", "VOICE_SOUND_INTERVAL_VARIANCE",
+        "VOICE_ALONE_DISCONNECT_SECONDS",
+        "VOICE_SPONTANEOUS_CHECK_INTERVAL", "VOICE_SPONTANEOUS_JOIN_CHANCE",
+        "VOICE_SPONTANEOUS_MIN_STAY", "VOICE_SPONTANEOUS_MAX_STAY",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
         "ENABLE_CHICKEN_OUT", "ENABLE_SUGGESTIONS", "ENABLE_RAPE_COMMAND",
         "ENABLE_LLM", "LLM_FALLBACK_ON_ERROR", "LLM_TYPING_INDICATOR",
         "LLM_PERCENTAGE", "ENABLE_LOGGING", "ENABLE_SHITPOST", "ENABLE_BIRTHDAYS",
+        "ENABLE_ATTENTION_WINDOW",
+        "ENABLE_VOICE", "ENABLE_VOICE_SOUNDS", "ENABLE_VOICE_SPONTANEOUS", "ENABLE_REPLY_TO_MESSAGE",
     }
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -290,12 +338,16 @@ def load_config() -> dict:
     config.setdefault("CHICKEN_OUT_TIMEOUT", 900)
     config.setdefault("CHICKENED_OUT_MSG", "https://tenor.com/view/walk-away-gif-8390063")
     config.setdefault("AUTHORIZED_USER_ID", 0)
+    config.setdefault("ATTENTION_WINDOW_SECONDS", 300)
+    config.setdefault("LLM_DEBOUNCE_SECONDS", 2)
+    config.setdefault("ENABLE_ATTENTION_WINDOW", False)
     config.setdefault("ENABLE_LLM", False)
     config.setdefault("LLM_PROVIDER", "ollama")
     config.setdefault("LLM_API_KEY", "")
     # Resolve default base URL per provider if not set
     provider_defaults = {
         "ollama":        "http://localhost:11434",
+        "ollama_cloud":  "https://ollama.com",
         "lmstudio":      "http://localhost:1234",
         "openai":        "https://api.openai.com",
         "anthropic":     "https://api.anthropic.com",
@@ -346,6 +398,20 @@ def load_config() -> dict:
     if not (0 <= config["BIRTHDAY_CHECK_HOUR"] <= 23):
         print("❌ BIRTHDAY_CHECK_HOUR must be between 0 and 23.")
         exit(1)
+
+    # Voice chat defaults
+    config.setdefault("ENABLE_REPLY_TO_MESSAGE", True)
+    config.setdefault("ENABLE_VOICE", False)
+    config.setdefault("SOUNDS_FOLDER", "sounds")
+    config.setdefault("VOICE_SOUND_INTERVAL_BASE", 45)
+    config.setdefault("VOICE_SOUND_INTERVAL_VARIANCE", 20)
+    config.setdefault("ENABLE_VOICE_SOUNDS", True)
+    config.setdefault("VOICE_ALONE_DISCONNECT_SECONDS", 30)
+    config.setdefault("ENABLE_VOICE_SPONTANEOUS", True)
+    config.setdefault("VOICE_SPONTANEOUS_CHECK_INTERVAL", 300)
+    config.setdefault("VOICE_SPONTANEOUS_JOIN_CHANCE", 25)
+    config.setdefault("VOICE_SPONTANEOUS_MIN_STAY", 60)
+    config.setdefault("VOICE_SPONTANEOUS_MAX_STAY", 300)
 
     return config
 
@@ -406,11 +472,36 @@ def log(level: str, text: str):
 # CONVERSATION MEMORY  (Discord channel history = our memory)
 # ============================================================
 
+def resolve_mentions(content: str, guild: discord.Guild | None) -> str:
+    """Replace raw <@user_id> mentions with readable display names.
+
+    e.g. "<@123456789>" -> "<Bufka2011>"
+    """
+    if guild is None:
+        return content
+
+    def _replace(match: re.Match) -> str:
+        uid = int(match.group(1))
+        member = guild.get_member(uid)
+        if member:
+            name = (
+                getattr(member, "nick", None)
+                or getattr(member, "global_name", None)
+                or member.display_name
+                or member.name
+            )
+            return f"<{name}>"
+        return match.group(0)  # Leave as-is if member not found
+
+    return re.sub(r"<@!?(\d+)>", _replace, content)
+
+
 async def fetch_channel_context(
     channel: discord.TextChannel,
     current_message: discord.Message | None,
     bot_user: discord.ClientUser,
     limit: int = 20,
+    guild: discord.Guild | None = None,
 ) -> list[dict]:
     if limit <= 0:
         return []
@@ -427,14 +518,21 @@ async def fetch_channel_context(
 
     history: list[dict] = []
     for msg in raw:
+        # Format timestamp as HH:MM (UTC)
+        timestamp = msg.created_at.strftime("%H:%M")
+        # Resolve @mentions to names
+        content = resolve_mentions(msg.content, guild)
+
         if msg.author == bot_user:
-            history.append({"role": "assistant", "content": msg.content})
+            history.append({"role": "assistant", "content": f"[{timestamp}] {content}"})
         else:
-            name = (getattr(msg.author, "nick", None)
-                    or getattr(msg.author, "global_name", None)
-                    or msg.author.display_name
-                    or msg.author.name)
-            history.append({"role": "user", "content": f"[{name}]: {msg.content}"})
+            name = (
+                getattr(msg.author, "nick", None)
+                or getattr(msg.author, "global_name", None)
+                or msg.author.display_name
+                or msg.author.name
+            )
+            history.append({"role": "user", "content": f"[{timestamp}] [{name}]: {content}"})
 
     return history
 
@@ -553,8 +651,636 @@ birthdays = BirthdayStore()
 
 
 # ============================================================
-# USER IDENTITY HELPERS
+# VOICE MANAGER
 # ============================================================
+
+class VoiceManager:
+    """Manages all voice channel logic for Bruh Bot.
+
+    Responsibilities:
+      - LLM-based voice invitation detection (no hardcoded phrases)
+      - Joining / leaving voice channels
+      - Periodic random sound playback from the sounds/ folder
+      - Auto-disconnect when the bot is left alone
+    """
+
+    SOUND_EXTENSIONS = {".mp3", ".ogg", ".wav", ".flac"}
+
+    def __init__(self):
+        # guild_id → discord.VoiceClient
+        self._voice_clients: dict[int, discord.VoiceClient] = {}
+        # guild_id → asyncio.Task (sound loop)
+        self._sound_tasks: dict[int, asyncio.Task] = {}
+        # guild_id → asyncio.Task (alone-watcher)
+        self._alone_tasks: dict[int, asyncio.Task] = {}
+        # guild_id → "invited" or "spontaneous"
+        self._join_modes: dict[int, str] = {}
+        # Background task for spontaneous joins
+        self._spontaneous_task: asyncio.Task | None = None
+        # Cached sound file list (refreshed on each join)
+        self._sounds: list[pathlib.Path] = []
+        self._load_sounds()
+
+    # ------------------------------------------------------------------
+    # Sound file discovery
+    # ------------------------------------------------------------------
+
+    def _load_sounds(self) -> int:
+        """Scan the configured sounds folder and cache file paths."""
+        folder = BOT_DIR / cfg.get("SOUNDS_FOLDER", "sounds")
+        if not folder.exists():
+            folder.mkdir(parents=True, exist_ok=True)
+            log("info", "[VOICE] Created empty sounds/ folder.")
+            self._sounds = []
+            return 0
+
+        self._sounds = [
+            p for p in folder.iterdir()
+            if p.is_file() and p.suffix.lower() in self.SOUND_EXTENSIONS
+        ]
+        log("info", f"[VOICE] {len(self._sounds)} sound(s) loaded from {folder}")
+        return len(self._sounds)
+
+    @property
+    def sounds(self) -> list[pathlib.Path]:
+        return self._sounds
+
+    # ------------------------------------------------------------------
+    # LLM: voice invitation decision
+    # ------------------------------------------------------------------
+
+    async def check_voice_invitation(
+        self,
+        message: discord.Message,
+        mention_text: str,
+    ) -> tuple[bool, str]:
+        """Ask the LLM whether the message is a voice channel invitation.
+
+        Returns:
+            (is_invitation, llm_response_text)
+            - is_invitation: True if LLM response starts with "JOIN"
+            - llm_response_text: Full LLM response to send to chat
+        """
+        if not cfg.get("ENABLE_LLM"):
+            return False, ""
+
+        voice_system_prompt = (
+            "You are Bruh - a sarcastic, chaotic Discord bot deciding whether to join a voice channel. "
+            "The user's message may or may not be inviting you to voice chat. "
+            "Analyze the message and make a decision IN CHARACTER as Bruh.\n\n"
+            "STRICT OUTPUT FORMAT:\n"
+            "- If this IS a voice invitation and you want to JOIN: start your reply with 'JOIN' "
+            "(uppercase), then add your sarcastic in-character response.\n"
+            "- If this is NOT a voice invitation, or you want to DECLINE: start with 'NO' or 'DECLINE', "
+            "then your response.\n"
+            "- 1-2 sentences max after the keyword.\n"
+            "- Stay in character: sarcastic, dry, chaotic. Dark humor is fine.\n"
+            "- ONLY output the keyword + your response. Nothing else."
+        )
+
+        user_identity = format_user_identity(message)
+        prompt = (
+            f"Message from {user_identity}: \"{mention_text}\"\n\n"
+            "Is this a voice channel invitation? Decide and respond as Bruh."
+        )
+
+        try:
+            response = await query_llm(
+                prompt=prompt,
+                user_identity=user_identity,
+                history=[],
+                extra_system_prompt=voice_system_prompt,
+                channel_name=getattr(message.channel, "name", ""),
+            )
+        except Exception as e:
+            log("warning", f"[VOICE] LLM voice-check failed: {e}")
+            return False, ""
+
+        if not response:
+            return False, ""
+
+        first_word = response.strip().split()[0].upper().rstrip(",.!?:")
+        is_invitation = first_word == "JOIN"
+        log("info", f"[VOICE] LLM decision: {first_word!r} | full: {response!r}")
+        return is_invitation, response
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
+    async def _clear_stale_voice_state(self, guild: discord.Guild):
+        """Tell Discord we are NOT in any voice channel.
+
+        This is the canonical fix for error 4006 ("session no longer valid").
+        4006 occurs when Discord's servers still hold a voice session from a
+        previous (dead) connection.  Sending a voice-state update with
+        channel=None resets that session before we open a fresh one.
+        """
+        try:
+            await guild.change_voice_state(channel=None)
+            # Give Discord's edge servers ~600 ms to propagate the reset.
+            await asyncio.sleep(0.6)
+            log("debug", f"[VOICE] Stale voice state cleared for guild {guild.id}")
+        except Exception as e:
+            log("warning", f"[VOICE] Could not clear stale state: {e}")
+
+    async def _purge_internal_voice_client(self, guild: discord.Guild) -> None:
+        """Force-remove any zombie VoiceClient discord.py holds internally for this guild.
+
+        After error 4006, discord.py leaves a dead VoiceClient in its internal
+        ``bot._connection._voice_clients`` dict.  That causes every subsequent
+        ``channel.connect()`` call to raise ``ClientException: Already connected``
+        before it even touches the network.  This method tears that zombie out so
+        the next ``connect()`` call starts with a clean slate.
+        """
+        existing = discord.utils.get(bot.voice_clients, guild=guild)
+        if existing is not None:
+            log("debug", f"[VOICE] Purging zombie VoiceClient for guild {guild.id}")
+            try:
+                await existing.disconnect(force=True)
+            except Exception as e:
+                log("debug", f"[VOICE] Zombie disconnect raised (expected): {e}")
+            # Give the event loop one tick to flush cleanup callbacks
+            await asyncio.sleep(0.2)
+
+    async def _connect_with_retry(
+        self,
+        voice_channel: discord.VoiceChannel,
+        max_attempts: int = 3,
+        base_delay: float = 2.0,
+    ) -> discord.VoiceClient | None:
+        """Attempt to connect to *voice_channel*, handling 4006 + zombie VCs.
+
+        Flow on each attempt:
+          1. Purge any zombie discord.py-internal VoiceClient (fixes ClientException).
+          2. Clear stale gateway voice state (fixes 4006 from Discord's side).
+          3. Call connect(reconnect=False) so we get an exception immediately
+             instead of discord.py's silent retry loop.
+          4. Verify is_connected() — connect() can return a dead VC without raising.
+
+        Returns a live VoiceClient on success, or None after all attempts fail.
+
+        NOTE: Upgrading discord.py to ≥2.5 (post-PR#10210, merged 2025-06-30)
+        is the primary fix for 4006.  That PR upgrades the voice gateway from
+        v4 → v8 which Discord now requires.  This method is a belt-and-suspenders
+        workaround for older installations.
+        """
+        guild = voice_channel.guild
+
+        for attempt in range(1, max_attempts + 1):
+            delay = base_delay * attempt  # 2s, 4s, 6s
+
+            # --- Step 1: Remove zombie VoiceClient from discord.py's internals ---
+            await self._purge_internal_voice_client(guild)
+
+            # --- Step 2: Reset stale gateway voice state on Discord's servers ---
+            await self._clear_stale_voice_state(guild)
+
+            try:
+                log("info",
+                    f"[VOICE] Connecting to #{voice_channel.name} "
+                    f"(attempt {attempt}/{max_attempts})")
+
+                vc = await voice_channel.connect(
+                    self_mute=True,
+                    self_deaf=False,
+                    reconnect=False,  # raise immediately — we own the retry loop
+                    timeout=20.0,
+                )
+
+                # --- Step 4: Verify the VC is genuinely alive ---
+                if not vc.is_connected():
+                    log("warning",
+                        f"[VOICE] connect() returned a dead VC (attempt {attempt}). Retrying...")
+                    try:
+                        await vc.disconnect(force=True)
+                    except Exception:
+                        pass
+                    if attempt < max_attempts:
+                        await asyncio.sleep(delay)
+                    continue
+
+                log("info", f"[VOICE] Connected successfully on attempt {attempt}.")
+                return vc
+
+            except discord.errors.ConnectionClosed as e:
+                if e.code == 4006:
+                    # Session invalidated — purge + clear runs again at top of loop
+                    log("warning",
+                        f"[VOICE] 4006 (session invalid) on attempt {attempt}/{max_attempts}. "
+                        f"discord.py may need updating (pip install -U 'discord.py[voice]'). "
+                        f"Retrying in {delay:.0f}s...")
+                    print(f"⚠️  Voice 4006 on attempt {attempt}/{max_attempts} — retrying in {delay:.0f}s")
+                else:
+                    log("error",
+                        f"[VOICE] ConnectionClosed code={e.code} on attempt {attempt}: {e}")
+                    print(f"❌ Voice WS closed with code {e.code}")
+                    # Non-4006 codes are not retryable
+                    break
+
+            except discord.ClientException as e:
+                # Should not happen after _purge_internal_voice_client, but just in case
+                log("warning", f"[VOICE] ClientException on attempt {attempt}: {e}")
+                print(f"⚠️  Voice ClientException on attempt {attempt}: {e}")
+
+            except asyncio.TimeoutError:
+                log("warning", f"[VOICE] connect() timed out on attempt {attempt}")
+                print(f"⚠️  Voice connect timed out (attempt {attempt})")
+
+            except Exception as e:
+                log("error", f"[VOICE] Unexpected error on attempt {attempt}: {e}")
+                print(f"❌ Voice connect error: {e}")
+                break
+
+            if attempt < max_attempts:
+                await asyncio.sleep(delay)
+
+        log("error", f"[VOICE] All {max_attempts} attempts failed for #{voice_channel.name}.")
+        return None
+
+    async def join_voice(
+        self,
+        guild_id: int,
+        voice_channel: discord.VoiceChannel,
+        text_channel: discord.TextChannel | None,
+        llm_response: str,
+        mode: str = "invited",
+    ) -> bool:
+        """Connect to *voice_channel*, optionally send *llm_response* to *text_channel*.
+
+        mode: "invited"      — stay until channel empty for VOICE_ALONE_DISCONNECT_SECONDS.
+              "spontaneous"  — leave after random stay, or immediately when alone.
+        Returns True on success, False on failure.
+        """
+        # Cleanly tear down any existing session in this guild first.
+        await self.disconnect(guild_id, reason="rejoining")
+
+        # Refresh sound list each time we join.
+        self._load_sounds()
+
+        # Send the LLM response to text chat BEFORE connecting (invited only).
+        if text_channel and llm_response:
+            try:
+                clean = llm_response.strip()
+                for prefix in ("JOIN ", "JOIN\n", "JOIN"):
+                    if clean.upper().startswith(prefix.upper()):
+                        clean = clean[len(prefix):].strip()
+                        break
+                if clean:
+                    await text_channel.send(clean)
+            except discord.Forbidden:
+                pass
+
+        # Connect — with 4006-resistant retry logic.
+        vc = await self._connect_with_retry(voice_channel)
+        if vc is None:
+            log("error", f"[VOICE] Could not connect to #{voice_channel.name} after retries.")
+            print(f"❌ Voice: failed to connect to #{voice_channel.name}")
+            return False
+
+        self._voice_clients[guild_id] = vc
+        self._join_modes[guild_id] = mode
+        log("info", f"[VOICE] Successfully joined #{voice_channel.name} in guild {guild_id} (mode={mode})")
+        print(f"🎙️ Joined voice: #{voice_channel.name} (mode={mode})")
+
+        # Start the sound loop and alone-watcher.
+        if cfg.get("ENABLE_VOICE_SOUNDS") and self._sounds:
+            self._start_sound_loop(guild_id, voice_channel)
+        self._start_alone_watcher(guild_id, voice_channel)
+        return True
+
+    async def disconnect(self, guild_id: int, reason: str = "manual") -> bool:
+        """Cleanly disconnect from voice in *guild_id* and cancel all tasks."""
+        # Cancel sound loop
+        task = self._sound_tasks.pop(guild_id, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
+        # Cancel alone-watcher
+        task = self._alone_tasks.pop(guild_id, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
+        # Disconnect voice client
+        vc = self._voice_clients.pop(guild_id, None)
+        self._join_modes.pop(guild_id, None)
+        if vc:
+            try:
+                if vc.is_connected():
+                    await vc.disconnect(force=False)
+            except Exception as e:
+                log("warning", f"[VOICE] Error during disconnect ({reason}): {e}")
+                try:
+                    await vc.disconnect(force=True)
+                except Exception:
+                    pass
+            log("info", f"[VOICE] Disconnected from guild {guild_id} (reason: {reason})")
+            print(f"🔇 Voice disconnected (guild {guild_id}, reason: {reason})")
+            return True
+        return False
+
+    def is_connected(self, guild_id: int) -> bool:
+        vc = self._voice_clients.get(guild_id)
+        return vc is not None and vc.is_connected()
+
+    def get_voice_client(self, guild_id: int) -> discord.VoiceClient | None:
+        return self._voice_clients.get(guild_id)
+
+    # ------------------------------------------------------------------
+    # Sound playback loop
+    # ------------------------------------------------------------------
+
+    def _start_sound_loop(self, guild_id: int, voice_channel: discord.VoiceChannel):
+        """Spawn the periodic sound playback task."""
+        task = asyncio.create_task(
+            self._sound_loop(guild_id, voice_channel),
+            name=f"voice-sound-{guild_id}",
+        )
+        self._sound_tasks[guild_id] = task
+        task.add_done_callback(lambda t: self._sound_tasks.pop(guild_id, None))
+
+    async def _sound_loop(self, guild_id: int, voice_channel: discord.VoiceChannel):
+        """Randomly play a sound file every INTERVAL ± VARIANCE seconds."""
+        base = max(5, cfg.get("VOICE_SOUND_INTERVAL_BASE", 45))
+        variance = cfg.get("VOICE_SOUND_INTERVAL_VARIANCE", 20)
+
+        try:
+            while True:
+                delay = base + random.uniform(-variance, variance)
+                delay = max(5.0, delay)
+                await asyncio.sleep(delay)
+
+                vc = self._voice_clients.get(guild_id)
+                if not vc or not vc.is_connected():
+                    log("debug", "[VOICE] Sound loop: vc gone, exiting.")
+                    break
+
+                if not self._sounds:
+                    log("debug", "[VOICE] Sound loop: no sounds available, sleeping.")
+                    continue
+
+                if vc.is_playing():
+                    log("debug", "[VOICE] Sound loop: already playing, skipping.")
+                    continue
+
+                sound_file = random.choice(self._sounds)
+                await self._play_sound(vc, sound_file)
+
+        except asyncio.CancelledError:
+            log("debug", "[VOICE] Sound loop cancelled.")
+        except Exception as e:
+            log("error", f"[VOICE] Sound loop error: {e}")
+            print(f"❌ Voice sound loop error: {e}")
+
+    async def _play_sound(self, vc: discord.VoiceClient, path: pathlib.Path):
+        """Unmute, play a sound file, then mute again."""
+        guild_id = vc.guild.id
+        log("info", f"[VOICE] Playing sound: {path.name}")
+        print(f"🔊 Playing: {path.name}")
+
+        try:
+            # Unmute
+            await vc.guild.change_voice_state(channel=vc.channel, self_mute=False, self_deaf=False)
+
+            source = discord.FFmpegPCMAudio(
+                str(path),
+                options="-vn",  # skip video streams (safe for all formats)
+            )
+
+            done_event = asyncio.Event()
+
+            def after_play(error):
+                if error:
+                    log("warning", f"[VOICE] Playback error: {type(error).__name__}: {error}")
+                done_event.set()
+
+            vc.play(source, after=after_play)
+
+            # Wait for playback to finish (with a generous timeout)
+            try:
+                await asyncio.wait_for(done_event.wait(), timeout=300)
+            except asyncio.TimeoutError:
+                vc.stop()
+                log("warning", "[VOICE] Sound playback timed out, stopped.")
+
+        except discord.ClientException as e:
+            log("warning", f"[VOICE] ClientException during playback: {e}")
+        except Exception as e:
+            log("error", f"[VOICE] Playback failed ({path.name}): {type(e).__name__}: {e}")
+            print(f"❌ Playback error: {type(e).__name__}: {e}")
+        finally:
+            # Always re-mute after playing (or on error)
+            try:
+                if vc.is_connected():
+                    await vc.guild.change_voice_state(
+                        channel=vc.channel, self_mute=True, self_deaf=False
+                    )
+            except Exception as e:
+                log("warning", f"[VOICE] Could not re-mute: {e}")
+
+    # ------------------------------------------------------------------
+    # Alone-watcher
+    # ------------------------------------------------------------------
+
+    def _start_alone_watcher(self, guild_id: int, voice_channel: discord.VoiceChannel):
+        """Spawn the task that auto-disconnects if bot is left alone."""
+        task = asyncio.create_task(
+            self._alone_watcher(guild_id, voice_channel),
+            name=f"voice-alone-{guild_id}",
+        )
+        self._alone_tasks[guild_id] = task
+        task.add_done_callback(lambda t: self._alone_tasks.pop(guild_id, None))
+
+    async def _alone_watcher(self, guild_id: int, voice_channel: discord.VoiceChannel):
+        """Poll every 5s.
+        - invited:     stay until channel empty for VOICE_ALONE_DISCONNECT_SECONDS.
+        - spontaneous: leave after random stay duration, or immediately when alone.
+        """
+        timeout = max(5, cfg.get("VOICE_ALONE_DISCONNECT_SECONDS", 30))
+        alone_since: float | None = None
+
+        mode = self._join_modes.get(guild_id, "invited")
+        stay_deadline: float | None = None
+        if mode == "spontaneous":
+            min_stay = cfg.get("VOICE_SPONTANEOUS_MIN_STAY", 60)
+            max_stay = cfg.get("VOICE_SPONTANEOUS_MAX_STAY", 300)
+            stay_seconds = random.uniform(min_stay, max_stay)
+            stay_deadline = asyncio.get_event_loop().time() + stay_seconds
+            log("info", f"[VOICE] Spontaneous stay timer: {stay_seconds:.0f}s in #{voice_channel.name}")
+
+        try:
+            while True:
+                await asyncio.sleep(5)
+
+                vc = self._voice_clients.get(guild_id)
+                if not vc or not vc.is_connected():
+                    break
+
+                now = asyncio.get_event_loop().time()
+                current_mode = self._join_modes.get(guild_id, "invited")
+                human_members = [m for m in vc.channel.members if not m.bot]
+
+                # ── Spontaneous mode ──────────────────────────────────
+                if current_mode == "spontaneous":
+                    if not human_members:
+                        log("info", f"[VOICE] Spontaneous: alone in #{vc.channel.name}, leaving.")
+                        print(f"🔇 Spontaneous leave: alone in #{vc.channel.name}")
+                        await self.disconnect(guild_id, reason="spontaneous-alone")
+                        break
+                    if stay_deadline and now >= stay_deadline:
+                        log("info", f"[VOICE] Spontaneous stay expired in #{vc.channel.name}, leaving.")
+                        print(f"🔇 Spontaneous leave: stay timer expired in #{vc.channel.name}")
+                        await self.disconnect(guild_id, reason="spontaneous-timeout")
+                        break
+                    continue
+
+                # ── Invited mode ──────────────────────────────────────
+                if not human_members:
+                    if alone_since is None:
+                        alone_since = now
+                        log("info", f"[VOICE] Alone in #{vc.channel.name}, starting {timeout}s timer.")
+                    elif now - alone_since >= timeout:
+                        log("info", f"[VOICE] Alone for {timeout}s, auto-disconnecting.")
+                        print(f"🔇 Auto-disconnect: alone in #{vc.channel.name} for {timeout}s.")
+                        await self.disconnect(guild_id, reason="alone-timeout")
+                        break
+                else:
+                    if alone_since is not None:
+                        log("debug", "[VOICE] Someone rejoined, resetting alone timer.")
+                    alone_since = None
+
+        except asyncio.CancelledError:
+            log("debug", "[VOICE] Alone watcher cancelled.")
+        except Exception as e:
+            log("error", f"[VOICE] Alone watcher error: {e}")
+
+    # ------------------------------------------------------------------
+    # Spontaneous joins
+    # ------------------------------------------------------------------
+
+    def start_spontaneous_loop(self):
+        """Start the background spontaneous-join task (called from on_ready)."""
+        if not cfg.get("ENABLE_VOICE_SPONTANEOUS"):
+            return
+        self._spontaneous_task = asyncio.create_task(
+            self._spontaneous_loop(), name="voice-spontaneous"
+        )
+
+    async def _spontaneous_loop(self):
+        """Periodically scan guilds and randomly join a populated voice channel."""
+        check_interval = max(30, cfg.get("VOICE_SPONTANEOUS_CHECK_INTERVAL", 300))
+        join_chance = cfg.get("VOICE_SPONTANEOUS_JOIN_CHANCE", 25)
+
+        try:
+            await asyncio.sleep(60)
+            while True:
+                await asyncio.sleep(check_interval)
+
+                if not cfg.get("ENABLE_VOICE_SPONTANEOUS"):
+                    continue
+
+                for guild in bot.guilds:
+                    if self.is_connected(guild.id):
+                        continue
+                    populated = [
+                        ch for ch in guild.voice_channels
+                        if any(not m.bot for m in ch.members)
+                    ]
+                    if not populated:
+                        continue
+                    if random.randint(1, 100) > join_chance:
+                        continue
+                    channel = random.choice(populated)
+                    log("info", f"[VOICE] Spontaneously joining #{channel.name} in {guild.name}")
+                    print(f"🎲 Spontaneous join: #{channel.name} in {guild.name}")
+                    await self.join_voice(
+                        guild_id=guild.id,
+                        voice_channel=channel,
+                        text_channel=None,
+                        llm_response="",
+                        mode="spontaneous",
+                    )
+
+        except asyncio.CancelledError:
+            log("debug", "[VOICE] Spontaneous loop cancelled.")
+        except Exception as e:
+            log("error", f"[VOICE] Spontaneous loop error: {e}")
+            print(f"❌ Spontaneous loop error: {e}")
+
+    # ------------------------------------------------------------------
+    # Status info
+    # ------------------------------------------------------------------
+
+    def status_embed(self) -> discord.Embed:
+        """Build a status embed for the /voice-status command."""
+        embed = discord.Embed(
+            title="🎙️ Voice Manager Status",
+            color=discord.Color.green() if self._voice_clients else discord.Color.red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(
+            name="Feature enabled",
+            value="✅ Yes" if cfg.get("ENABLE_VOICE") else "❌ No",
+            inline=True,
+        )
+        embed.add_field(
+            name="Connected guilds",
+            value=str(len(self._voice_clients)) or "0",
+            inline=True,
+        )
+        embed.add_field(
+            name="Sounds loaded",
+            value=str(len(self._sounds)),
+            inline=True,
+        )
+        embed.add_field(
+            name="Sounds enabled",
+            value="✅ Yes" if cfg.get("ENABLE_VOICE_SOUNDS") else "❌ No",
+            inline=True,
+        )
+        embed.add_field(
+            name="Sound interval",
+            value=(
+                f"{cfg.get('VOICE_SOUND_INTERVAL_BASE', 45)}s "
+                f"± {cfg.get('VOICE_SOUND_INTERVAL_VARIANCE', 20)}s"
+            ),
+            inline=True,
+        )
+        embed.add_field(
+            name="Alone timeout",
+            value=f"{cfg.get('VOICE_ALONE_DISCONNECT_SECONDS', 30)}s",
+            inline=True,
+        )
+
+        if self._voice_clients:
+            lines = []
+            for gid, vc in self._voice_clients.items():
+                ch = getattr(vc, "channel", None)
+                ch_name = f"#{ch.name}" if ch else "unknown"
+                human_count = len([m for m in ch.members if not m.bot]) if ch else "?"
+                lines.append(f"Guild `{gid}` → {ch_name} ({human_count} humans)")
+            embed.add_field(name="Active sessions", value="\n".join(lines), inline=False)
+        else:
+            embed.add_field(name="Active sessions", value="None", inline=False)
+
+        sounds_folder = BOT_DIR / cfg.get("SOUNDS_FOLDER", "sounds")
+        embed.set_footer(text=f"Sounds folder: {sounds_folder}")
+        return embed
+
+
+# Global VoiceManager instance (initialised after bot is created)
+voice_manager: VoiceManager | None = None
+
+
+
 
 def format_user_identity(message: discord.Message) -> str:
     author = message.author
@@ -596,18 +1322,162 @@ def _parse_birthday_ping_roles() -> list[int]:
 
 
 # ============================================================
+# ATTENTION WINDOW
+# ============================================================
+
+# Tracks channels where Bruh is "paying attention" without needing a new @ping.
+# Format: { channel_id: {"user_id": int, "expires": datetime} }
+attention_windows: dict[int, dict] = {}
+
+
+def _check_attention_window(message: discord.Message, bot_user: discord.ClientUser) -> bool:
+    """Return True if the bot should respond in this channel without being @mentioned.
+
+    Rules:
+    - Window must not have expired.
+    - Always respond if the bot's name ("bruh") appears anywhere in the message.
+    - Respond if the message is from the user who activated the window AND they are
+      not @mentioning someone else (which signals they're talking to another person).
+    - Silently ignore messages from other users that don't mention the bot name.
+    """
+    channel_id = message.channel.id
+    window = attention_windows.get(channel_id)
+    if not window:
+        return False
+
+    now = discord.utils.utcnow()
+    if window["expires"] <= now:
+        attention_windows.pop(channel_id, None)
+        log("debug", f"[ATTENTION] Window expired for channel {channel_id}")
+        return False
+
+    # If they're replying to another message, check who they're replying to.
+    # A reply to the bot is fine; a reply to anyone else means they've moved on.
+    if message.reference is not None:
+        ref = message.reference.resolved
+        if isinstance(ref, discord.Message) and ref.author.id != bot_user.id:
+            return False
+
+    return True
+
+
+def _refresh_attention_window(message: discord.Message):
+    """Set or refresh the attention window for the message's channel."""
+    seconds = cfg.get("ATTENTION_WINDOW_SECONDS", 300)
+    if seconds <= 0:
+        return
+    attention_windows[message.channel.id] = {
+        "user_id": message.author.id,
+        "expires": discord.utils.utcnow() + timedelta(seconds=seconds),
+    }
+    log("info", f"[ATTENTION] Window opened in #{getattr(message.channel, 'name', message.channel.id)} "
+                f"by {message.author} | expires in {seconds}s")
+
+
+# ============================================================
+# DEBOUNCE
+# ============================================================
+
+# Pending debounce tasks per channel: { channel_id: asyncio.Task }
+_debounce_tasks: dict[int, asyncio.Task] = {}
+
+# The latest triggering message per channel (what we'll reply to after the wait)
+_debounce_last_message: dict[int, discord.Message] = {}
+
+
+def _schedule_debounced_reply(
+    message: discord.Message,
+    mention_text: str,
+    user_identity: str,
+    source: str,
+):
+    """Cancel any pending debounce task for this channel and schedule a new one.
+
+    When the timer fires (no new messages arrived within LLM_DEBOUNCE_SECONDS),
+    handle_llm_mention is called with the *latest* message, so the full burst
+    is already present in the channel history for fetch_channel_context to pick up.
+    """
+    channel_id = message.channel.id
+    delay = cfg.get("LLM_DEBOUNCE_SECONDS", 2)
+
+    # Cancel previous pending task if any
+    existing = _debounce_tasks.get(channel_id)
+    if existing and not existing.done():
+        existing.cancel()
+        log("debug", f"[DEBOUNCE] Cancelled previous task for channel {channel_id}")
+
+    # Store the latest message so the fired task uses it
+    _debounce_last_message[channel_id] = message
+
+    async def _fire():
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+        # Use the most recent message stored at the time we fire
+        last_msg = _debounce_last_message.get(channel_id)
+        if last_msg is None:
+            return
+
+        # Strip bot mention from the latest message
+        final_text = get_mention_text(last_msg, bot.user) or last_msg.content
+        final_identity = format_user_identity(last_msg)
+
+        log("debug", f"[DEBOUNCE] Firing for channel {channel_id} | {final_identity}")
+
+        if cfg["ENABLE_LLM"]:
+            if cfg["LLM_PERCENTAGE"] and random.randint(1, 100) > cfg["LLM_PERCENTAGE_VALUE"]:
+                log("debug", f"[LLM] Skipped (percentage gate) for {final_identity}")
+                channel_info = f"#{last_msg.channel}" if hasattr(last_msg.channel, "name") else "DM"
+                if msgs.mention:
+                    fallback = random.choice(msgs.mention)
+                    try:
+                        await last_msg.channel.send(fallback)
+                        log("info", f"[LLM-PCT-SKIP] {channel_info} | BOT - {fallback!r}")
+                    except discord.Forbidden:
+                        pass
+                return
+            await handle_llm_mention(last_msg, final_text, final_identity)
+        else:
+            if msgs.mention:
+                fallback = random.choice(msgs.mention)
+                try:
+                    await last_msg.channel.send(fallback)
+                    channel_info = f"#{last_msg.channel}" if hasattr(last_msg.channel, "name") else "DM"
+                    log("info", f"[{source}-REPLY] {channel_info} | BOT - {fallback!r}")
+                except discord.Forbidden:
+                    pass
+
+        # Cleanup
+        _debounce_tasks.pop(channel_id, None)
+        _debounce_last_message.pop(channel_id, None)
+
+    task = asyncio.create_task(_fire())
+    _debounce_tasks[channel_id] = task
+
+
+# ============================================================
 # LLM CLIENT
 # ============================================================
 
-def _build_messages(prompt: str, user_identity: str, history: list[dict],
-                    extra_system_prompt: str = "") -> list[dict]:
+def _build_messages(
+    prompt: str,
+    user_identity: str,
+    history: list[dict],
+    extra_system_prompt: str = "",
+    channel_name: str = "",
+) -> list[dict]:
+    channel_ctx = (
+        f"\nYou are currently active in channel: #{channel_name}." if channel_name else ""
+    )
     system_prompt = (
         cfg["LLM_SYSTEM_PROMPT"]
         + (f"\n\n{extra_system_prompt}" if extra_system_prompt else "")
         + f"\n\nYou are participating in a group Discord chat. Multiple people may talk to you."
+        + channel_ctx
         + f"\nThe person currently addressing you is: {user_identity}"
-        + f"\nWhen you see messages prefixed with [Name]:, those are other members of the chat."
-        + f"\nBe aware of what others said and respond to the right person."
+        + f"\nWhen you see messages prefixed with [HH:MM] [Name]:, those are other members of the chat."
+        + f"\nTimestamps are in UTC and show when each message was sent."
+        + f"\nBe aware of what others said, who said it, and when."
     )
     msgs_out = [{"role": "system", "content": system_prompt}]
     msgs_out.extend(history)
@@ -629,6 +1499,41 @@ async def _query_ollama(messages: list[dict], session: aiohttp.ClientSession) ->
             return None
         data = await resp.json()
         return data.get("message", {}).get("content", "").strip()
+
+
+async def _query_ollama_cloud(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
+    """Query the Ollama Cloud API at ollama.com using Bearer token auth.
+
+    Note: 'options' (num_predict etc.) is a local-Ollama-only field.
+    The cloud endpoint ignores/rejects it, causing empty responses - so it is omitted.
+    """
+    api_key = cfg.get("LLM_API_KEY", "").strip()
+    if not api_key:
+        print("❌ ollama_cloud requires LLM_API_KEY. Get one at https://ollama.com/settings/keys")
+        return None
+
+    url = f"{cfg['LLM_BASE_URL'].rstrip('/')}/api/chat"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    payload = {
+        "model": cfg["LLM_MODEL"],
+        "stream": False,
+        "messages": messages,
+    }
+    async with session.post(url, json=payload, headers=headers) as resp:
+        if resp.status == 401:
+            print("❌ Ollama Cloud: Unauthorized - check your LLM_API_KEY.")
+            return None
+        if resp.status != 200:
+            print(f"❌ Ollama Cloud returned HTTP {resp.status}: {await resp.text()}")
+            return None
+        data = await resp.json()
+        content = data.get("message", {}).get("content", "").strip()
+        if not content:
+            print(f"⚠️  Ollama Cloud returned empty content. Raw response: {data}")
+        return content or None
 
 
 async def _query_openai_compat(messages: list[dict], session: aiohttp.ClientSession,
@@ -708,10 +1613,15 @@ async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession) ->
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
-async def query_llm(prompt: str, user_identity: str, history: list[dict],
-                    extra_system_prompt: str = "") -> str | None:
+async def query_llm(
+    prompt: str,
+    user_identity: str,
+    history: list[dict],
+    extra_system_prompt: str = "",
+    channel_name: str = "",
+) -> str | None:
     provider = cfg.get("LLM_PROVIDER", "ollama").lower()
-    messages  = _build_messages(prompt, user_identity, history, extra_system_prompt)
+    messages = _build_messages(prompt, user_identity, history, extra_system_prompt, channel_name)
 
     try:
         timeout = aiohttp.ClientTimeout(total=cfg["LLM_TIMEOUT"])
@@ -719,6 +1629,9 @@ async def query_llm(prompt: str, user_identity: str, history: list[dict],
 
             if provider == "ollama":
                 return await _query_ollama(messages, session)
+
+            elif provider == "ollama_cloud":
+                return await _query_ollama_cloud(messages, session)
 
             elif provider == "anthropic":
                 return await _query_anthropic(messages, session)
@@ -755,6 +1668,7 @@ async def query_llm(prompt: str, user_identity: str, history: list[dict],
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.voice_states = True
 
 bot = commands.Bot(command_prefix=cfg["COMMAND_PREFIX"], intents=intents)
 
@@ -1007,15 +1921,25 @@ async def shitpost_loop():
         elif pick == "llm":
             extra_prompt = cfg.get("SHITPOST_LLM_EXTRA_PROMPT", "").strip()
             shitpost_trigger = "Post something random right now. No context. Just go."
-            history = await fetch_channel_context(channel, None, bot.user,
-                                                  limit=cfg.get("LLM_CONTEXT_MESSAGES", 20))
+            channel_name = getattr(channel, "name", "")
+            history = await fetch_channel_context(
+                channel, None, bot.user,
+                limit=cfg.get("LLM_CONTEXT_MESSAGES", 20),
+                guild=channel.guild if hasattr(channel, "guild") else None,
+            )
             if cfg["LLM_TYPING_INDICATOR"]:
                 async with channel.typing():
-                    text = await query_llm(shitpost_trigger, "Bruh", history,
-                                           extra_system_prompt=extra_prompt)
+                    text = await query_llm(
+                        shitpost_trigger, "Bruh", history,
+                        extra_system_prompt=extra_prompt,
+                        channel_name=channel_name,
+                    )
             else:
-                text = await query_llm(shitpost_trigger, "Bruh", history,
-                                       extra_system_prompt=extra_prompt)
+                text = await query_llm(
+                    shitpost_trigger, "Bruh", history,
+                    extra_system_prompt=extra_prompt,
+                    channel_name=channel_name,
+                )
 
             if not text:
                 fallback_pool = [m for lst in [msgs.default, msgs.mention] for m in lst]
@@ -1087,13 +2011,26 @@ async def before_birthday_check_loop():
 
 @bot.event
 async def on_ready():
+    global voice_manager
     print(f"✅ {bot.user} is online!")
-    print(f"   Default msgs : {len(msgs.default)}")
-    print(f"   Mention msgs : {len(msgs.mention)}")
-    print(f"   LLM          : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] + ' @ ' + cfg['LLM_BASE_URL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
-    print(f"   Context msgs : last {cfg['LLM_CONTEXT_MESSAGES']} channel messages per response")
-    print(f"   Logging      : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
-    print(f"   Guild ID     : {cfg['GUILD_ID'] if cfg['GUILD_ID'] else '❌ not set (all commands global)'}")
+    print(f"   Default msgs      : {len(msgs.default)}")
+    print(f"   Mention msgs      : {len(msgs.mention)}")
+    print(f"   LLM               : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] + ' @ ' + cfg['LLM_BASE_URL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
+    print(f"   Context msgs      : last {cfg['LLM_CONTEXT_MESSAGES']} channel messages per response")
+    print(f"   Attention window  : {'✅ ' + str(cfg['ATTENTION_WINDOW_SECONDS']) + 's | debounce ' + str(cfg['LLM_DEBOUNCE_SECONDS']) + 's' if cfg['ENABLE_ATTENTION_WINDOW'] else '❌ ping-only mode'}")
+    print(f"   Logging           : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
+    print(f"   Guild ID          : {cfg['GUILD_ID'] if cfg['GUILD_ID'] else '❌ not set (all commands global)'}")
+
+    # ── Voice manager ─────────────────────────────────────────────────────────
+    if cfg.get("ENABLE_VOICE"):
+        voice_manager = VoiceManager()
+        voice_manager.start_spontaneous_loop()
+        print(f"   Voice             : ✅ sounds={len(voice_manager.sounds)} | "
+              f"interval={cfg['VOICE_SOUND_INTERVAL_BASE']}±{cfg['VOICE_SOUND_INTERVAL_VARIANCE']}s | "
+              f"alone-timeout={cfg['VOICE_ALONE_DISCONNECT_SECONDS']}s")
+    else:
+        voice_manager = None
+        print(f"   Voice             : ❌ disabled")
 
     # ── Auto-fix duplicates before syncing ──────────────────────────────────
     await fix_duplicate_commands()
@@ -1118,10 +2055,10 @@ async def on_ready():
         if not shitpost_loop.is_running():
             shitpost_loop.start()
         extra = cfg.get("SHITPOST_LLM_EXTRA_PROMPT", "").strip()
-        print(f"   Shitpost     : ✅ every {interval} min - channel {cfg['SHITPOST_CHANNEL_ID']}")
-        print(f"   Shitpost LLM extra prompt: {'✅ set' if extra else 'ℹ️  none'}")
+        print(f"   Shitpost          : ✅ every {interval} min - channel {cfg['SHITPOST_CHANNEL_ID']}")
+        print(f"   Shitpost LLM extra: {'✅ set' if extra else 'ℹ️  none'}")
     else:
-        print(f"   Shitpost     : ❌ disabled")
+        print(f"   Shitpost          : ❌ disabled")
 
     # ── Birthday loop ────────────────────────────────────────────────────────
     if cfg["ENABLE_BIRTHDAYS"]:
@@ -1129,12 +2066,12 @@ async def on_ready():
             birthday_check_loop.start()
         role_ids = _parse_birthday_ping_roles()
         roles_str = ", ".join(str(r) for r in role_ids) if role_ids else "none"
-        print(f"   Birthdays    : ✅ channel={cfg['BIRTHDAY_CHANNEL_ID']} | "
+        print(f"   Birthdays         : ✅ channel={cfg['BIRTHDAY_CHANNEL_ID']} | "
               f"check hour={cfg['BIRTHDAY_CHECK_HOUR']}:00 UTC | "
               f"ping roles=[{roles_str}] | "
               f"registered={len(birthdays.all())}")
     else:
-        print(f"   Birthdays    : ❌ disabled")
+        print(f"   Birthdays         : ❌ disabled")
 
 
 @bot.event
@@ -1170,49 +2107,80 @@ async def on_message(message: discord.Message):
         except discord.Forbidden:
             pass
 
-    # --- Mention / reply response ---
+    # --- Mention / attention-window response ---
     if cfg["ENABLE_MENTION_RESPONSES"]:
         is_mentioned = bot.user.mentioned_in(message)
+        in_window = (
+            cfg.get("ENABLE_ATTENTION_WINDOW", False)
+            and _check_attention_window(message, bot.user)
+        ) if not is_mentioned else False
+        if in_window:
+            log("info", f"[WINDOW] #{getattr(message.channel, 'name', message.channel.id)} "
+                        f"| {format_user_identity(message)}: {message.content!r}")
 
-        if is_mentioned:
-            mention_text = get_mention_text(message, bot.user)
+        if is_mentioned or in_window:
+            # Determine the prompt text
+            if is_mentioned:
+                mention_text = get_mention_text(message, bot.user)
+            else:
+                mention_text = message.content
 
-            if not mention_text:
-                log("info", f"[MENTION-EMPTY] {channel_info} | {user_identity} pinged with no text")
+            source = "MENTION" if is_mentioned else "WINDOW"
+
+            # Bare @ping with no text → random fallback, don't open/refresh window
+            if is_mentioned and not mention_text:
+                log("info", f"[{source}-EMPTY] {channel_info} | {user_identity} pinged with no text")
                 if msgs.mention:
                     fallback = random.choice(msgs.mention)
                     try:
-                        await message.channel.send(fallback)
-                        log("info", f"[MENTION-EMPTY-REPLY] {channel_info} | BOT - {fallback!r}")
+                        await bot_reply(message, fallback)
+                        log("info", f"[{source}-EMPTY-REPLY] {channel_info} | BOT - {fallback!r}")
                     except discord.Forbidden:
                         pass
-            else:
-                log("info", f"[MENTION] {channel_info} | {user_identity} said: {message.content!r}")
 
-                if cfg["ENABLE_LLM"]:
-                    if cfg["LLM_PERCENTAGE"] and random.randint(1, 100) > cfg["LLM_PERCENTAGE_VALUE"]:
-                        log("debug", f"[LLM] Skipped (percentage gate) for {user_identity}")
+            else:
+                log("info", f"[{source}] {channel_info} | {user_identity} said: {message.content!r}")
+
+                # Refresh (or open) the attention window now that we have real content
+                if cfg.get("ENABLE_ATTENTION_WINDOW", False):
+                    _refresh_attention_window(message)
+
+                # Schedule a debounced reply or respond immediately depending on mode
+                if cfg.get("ENABLE_ATTENTION_WINDOW", False):
+                    _schedule_debounced_reply(message, mention_text, user_identity, source)
+                else:
+                    # Ping-only mode: respond immediately, no debounce
+                    if cfg["ENABLE_LLM"]:
+                        if cfg["LLM_PERCENTAGE"] and random.randint(1, 100) > cfg["LLM_PERCENTAGE_VALUE"]:
+                            log("debug", f"[LLM] Skipped (percentage gate) for {user_identity}")
+                            if msgs.mention:
+                                fallback = random.choice(msgs.mention)
+                                try:
+                                    await bot_reply(message, fallback)
+                                    log("info", f"[LLM-PCT-SKIP] {channel_info} | BOT - {fallback!r}")
+                                except discord.Forbidden:
+                                    pass
+                        else:
+                            await handle_llm_mention(message, mention_text, user_identity)
+                    else:
                         if msgs.mention:
                             fallback = random.choice(msgs.mention)
                             try:
-                                await message.channel.send(fallback)
-                                log("info", f"[LLM-PCT-SKIP] {channel_info} | BOT - {fallback!r}")
+                                await bot_reply(message, fallback)
+                                log("info", f"[{source}-REPLY] {channel_info} | BOT - {fallback!r}")
                             except discord.Forbidden:
                                 pass
-                        await bot.process_commands(message)
-                        return
-
-                    await handle_llm_mention(message, mention_text, user_identity)
-                else:
-                    if msgs.mention:
-                        fallback = random.choice(msgs.mention)
-                        try:
-                            await message.channel.send(fallback)
-                            log("info", f"[MENTION-REPLY] {channel_info} | BOT - {fallback!r}")
-                        except discord.Forbidden:
-                            pass
 
     await bot.process_commands(message)
+
+
+async def bot_reply(message: discord.Message, text: str) -> None:
+    """Send *text* as a Discord reply to *message* if ENABLE_REPLY_TO_MESSAGE is on,
+    otherwise send a plain channel message."""
+    if cfg.get("ENABLE_REPLY_TO_MESSAGE", True):
+        await message.reply(text, mention_author=False)
+    else:
+        await message.channel.send(text)
 
 
 async def handle_llm_mention(
@@ -1221,25 +2189,100 @@ async def handle_llm_mention(
     user_identity: str,
 ):
     context_limit = cfg.get("LLM_CONTEXT_MESSAGES", 20)
+    guild = message.guild
+    channel_name = getattr(message.channel, "name", "")
+
+    # Resolve @mentions in the prompt itself (e.g. "who is <@123>" → "who is <Bufka2011>")
+    prompt = resolve_mentions(prompt, guild)
+
     history = await fetch_channel_context(
-        message.channel, message, bot.user, limit=context_limit
+        message.channel, message, bot.user,
+        limit=context_limit,
+        guild=guild,
     )
+
+    # Build voice capability context if voice is enabled
+    voice_extra = ""
+    author_vc = message.author.voice
+    if cfg.get("ENABLE_VOICE") and voice_manager is not None and message.guild is not None:
+        if author_vc and author_vc.channel:
+            voice_extra = (
+                f"\n\n[VOICE CAPABILITY] {message.author.display_name} is currently in "
+                f"voice channel #{author_vc.channel.name}. "
+                "You CAN join them if you want to — it's one of your abilities. "
+                "If you decide to join, start your ENTIRE reply with the single word JOIN "
+                "(uppercase, on its own at the start), then write your normal response after it. "
+                "Only do this if joining genuinely fits the vibe of the conversation. "
+                "If you're not joining, respond completely normally — do NOT mention JOIN at all."
+            )
+        else:
+            voice_extra = (
+                "\n\n[VOICE CAPABILITY] You can join voice channels if invited, "
+                "but this user is not currently in one."
+            )
 
     try:
         if cfg["LLM_TYPING_INDICATOR"]:
             async with message.channel.typing():
-                response = await query_llm(prompt, user_identity, history)
+                response = await query_llm(
+                    prompt, user_identity, history,
+                    channel_name=channel_name,
+                    extra_system_prompt=voice_extra,
+                )
         else:
-            response = await query_llm(prompt, user_identity, history)
+            response = await query_llm(
+                prompt, user_identity, history,
+                channel_name=channel_name,
+                extra_system_prompt=voice_extra,
+            )
 
-        if response:
+        if not response:
+            raise ValueError("Empty response from LLM")
+
+        # Check if the LLM decided to join voice
+        first_word = response.strip().split()[0].upper().rstrip(",.!?:") if response.strip() else ""
+        if (
+            first_word == "JOIN"
+            and cfg.get("ENABLE_VOICE")
+            and voice_manager is not None
+            and message.guild is not None
+        ):
+            log("info", f"[VOICE] LLM decided to JOIN from regular mention | full: {response!r}")
+            if author_vc and author_vc.channel:
+                log("info", f"[VOICE] Accepting (via mention) from {user_identity} → #{author_vc.channel.name}")
+                joined = await voice_manager.join_voice(
+                    guild_id=message.guild.id,
+                    voice_channel=author_vc.channel,
+                    text_channel=message.channel,
+                    llm_response=response,
+                    mode="invited",
+                )
+                if not joined:
+                    try:
+                        await message.channel.send("ugh, tried to join but Discord had other plans. typical.")
+                    except discord.Forbidden:
+                        pass
+            else:
+                # LLM wanted to join but user isn't in VC — strip JOIN and respond normally
+                clean = response.strip()
+                for pfx in ("JOIN ", "JOIN\n", "JOIN"):
+                    if clean.upper().startswith(pfx):
+                        clean = clean[len(pfx):].strip()
+                        break
+                reply = clean if clean else "bro get in a voice channel first, i'm not a magician"
+                if len(reply) > 1990:
+                    reply = reply[:1990] + "..."
+                try:
+                    await message.channel.send(reply)
+                    log("info", f"[LLM-REPLY] BOT - {message.author} | {reply!r}")
+                except discord.Forbidden:
+                    pass
+        else:
+            # Normal response — send as-is
             if len(response) > 1990:
                 response = response[:1990] + "..."
-
-            await message.reply(response, mention_author=False)
+            await bot_reply(message, response)
             log("info", f"[LLM-REPLY] BOT - {message.author} | {response!r}")
-        else:
-            raise ValueError("Empty response from LLM")
 
     except Exception as e:
         print(f"❌ LLM mention handler error: {e}")
@@ -1250,7 +2293,7 @@ async def handle_llm_mention(
                 fallback = random.choice(msgs.mention)
             if fallback:
                 try:
-                    await message.channel.send(fallback)
+                    await bot_reply(message, fallback)
                     log("info", f"[LLM-FALLBACK] BOT - {message.author} | {fallback!r}")
                 except discord.Forbidden:
                     pass
@@ -1669,6 +2712,68 @@ bot.tree.add_command(birthday_group)
 
 
 # ============================================================
+# VOICE SLASH COMMANDS  (admin-only, guild-scoped)
+# ============================================================
+
+@bot.tree.command(
+    name="voice-status",
+    description="Show voice manager status: connection, sounds, config (admin only)",
+    guild=_GUILD,
+)
+@app_commands.default_permissions(administrator=True)
+async def voice_status(interaction: discord.Interaction):
+    if not cfg.get("ENABLE_VOICE"):
+        await interaction.response.send_message(
+            "❌ Voice is disabled. Set `ENABLE_VOICE=true` in config.txt.",
+            ephemeral=True,
+        )
+        return
+
+    if voice_manager is None:
+        await interaction.response.send_message(
+            "⚠️ VoiceManager not initialised yet (bot may still be starting up).",
+            ephemeral=True,
+        )
+        return
+
+    embed = voice_manager.status_embed()
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(
+    name="voice-disconnect",
+    description="Force-disconnect the bot from voice in this server (admin only)",
+    guild=_GUILD,
+)
+@app_commands.default_permissions(administrator=True)
+async def voice_disconnect(interaction: discord.Interaction):
+    if not cfg.get("ENABLE_VOICE"):
+        await interaction.response.send_message(
+            "❌ Voice is disabled in config.", ephemeral=True
+        )
+        return
+
+    if voice_manager is None or interaction.guild is None:
+        await interaction.response.send_message(
+            "⚠️ VoiceManager not available.", ephemeral=True
+        )
+        return
+
+    disconnected = await voice_manager.disconnect(
+        interaction.guild.id, reason=f"forced by {interaction.user}"
+    )
+    if disconnected:
+        log("info", f"[VOICE] Force-disconnected by {interaction.user} ({interaction.user.id})")
+        await interaction.response.send_message(
+            "✅ Disconnected from voice.", ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            "ℹ️ Bot is not currently in a voice channel.", ephemeral=True
+        )
+
+
+# ============================================================
 # CONTEXT MENU COMMANDS
 # ============================================================
 
@@ -1712,13 +2817,14 @@ if __name__ == "__main__":
     print(f"   Guild ID             : {cfg['GUILD_ID'] if cfg['GUILD_ID'] else '❌ not set (all commands global)'}")
     print(f"   Random msg chance    : 1 in {cfg['RANDOM_MESSAGE_CHANCE']}")
     print(f"   Chicken-out timeout  : {cfg['CHICKEN_OUT_TIMEOUT']}s")
+    print(f"   Attention window     : {'✅ ' + str(cfg['ATTENTION_WINDOW_SECONDS']) + 's | debounce ' + str(cfg['LLM_DEBOUNCE_SECONDS']) + 's' if cfg['ENABLE_ATTENTION_WINDOW'] else '❌ ping-only mode'}")
     print(f"   Random messages      : {'✅' if cfg['ENABLE_RANDOM_MESSAGES'] else '❌'}")
     print(f"   Mention responses    : {'✅' if cfg['ENABLE_MENTION_RESPONSES'] else '❌'}")
     print(f"   Auto-thread          : {'✅' if cfg['ENABLE_AUTO_THREAD'] else '❌'}")
     print(f"   Chicken out          : {'✅' if cfg['ENABLE_CHICKEN_OUT'] else '❌'}")
     print(f"   Suggestions          : {'✅' if cfg['ENABLE_SUGGESTIONS'] else '❌'}")
     print(f"   Rape command         : {'✅' if cfg['ENABLE_RAPE_COMMAND'] else '❌'}")
-    print(f"   LLM                  : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] if cfg['ENABLE_LLM'] else '❌ disabled'}")
+    print(f"   LLM                  : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] + (' ☁️' if cfg['LLM_PROVIDER'] == 'ollama_cloud' else '') if cfg['ENABLE_LLM'] else '❌ disabled'}")
     print(f"   Context messages     : last {cfg['LLM_CONTEXT_MESSAGES']} channel msgs per response")
     print(f"   Logging              : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
     print(f"   Shitpost             : {'✅ every ' + str(cfg['SHITPOST_INTERVAL_MINUTES']) + ' min - ch ' + str(cfg['SHITPOST_CHANNEL_ID']) if cfg['ENABLE_SHITPOST'] else '❌ disabled'}")
@@ -1734,6 +2840,19 @@ if __name__ == "__main__":
               f"roles={role_ids or 'none'}")
     else:
         print(f"   Birthdays            : ❌ disabled")
+
+    if cfg.get("ENABLE_VOICE"):
+        sounds_folder = BOT_DIR / cfg.get("SOUNDS_FOLDER", "sounds")
+        sound_count = len([
+            p for p in sounds_folder.iterdir()
+            if p.is_file() and p.suffix.lower() in {".mp3", ".ogg", ".wav", ".flac"}
+        ]) if sounds_folder.exists() else 0
+        print(f"   Voice                : ✅ sounds={sound_count} | "
+              f"folder={cfg['SOUNDS_FOLDER']} | "
+              f"interval={cfg['VOICE_SOUND_INTERVAL_BASE']}±{cfg['VOICE_SOUND_INTERVAL_VARIANCE']}s | "
+              f"alone-timeout={cfg['VOICE_ALONE_DISCONNECT_SECONDS']}s")
+    else:
+        print(f"   Voice                : ❌ disabled")
 
     try:
         bot.run(cfg["TOKEN"])
