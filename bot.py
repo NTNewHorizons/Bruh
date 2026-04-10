@@ -242,6 +242,15 @@ LOG_FILE=chat.log
 
 
 
+# --- Heartbeat / Uptime Monitor ---
+# URL to ping every few minutes so Kener (or any heartbeat monitor) knows the bot is alive.
+# Leave blank to disable.
+HEARTBEAT_URL=
+# How often (in seconds) to ping the heartbeat URL (default: 180 = 3 minutes)
+HEARTBEAT_INTERVAL_SECONDS=180
+
+
+
 # --- Voice Chat ---
 # Enable or disable the voice chat feature entirely
 ENABLE_VOICE=false
@@ -288,6 +297,7 @@ def load_config() -> dict:
         "VOICE_ALONE_DISCONNECT_SECONDS",
         "VOICE_SPONTANEOUS_CHECK_INTERVAL", "VOICE_SPONTANEOUS_JOIN_CHANCE",
         "VOICE_SPONTANEOUS_MIN_STAY", "VOICE_SPONTANEOUS_MAX_STAY",
+        "HEARTBEAT_INTERVAL_SECONDS",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
@@ -398,6 +408,10 @@ def load_config() -> dict:
     if not (0 <= config["BIRTHDAY_CHECK_HOUR"] <= 23):
         print("❌ BIRTHDAY_CHECK_HOUR must be between 0 and 23.")
         exit(1)
+
+    # Heartbeat defaults
+    config.setdefault("HEARTBEAT_URL", "")
+    config.setdefault("HEARTBEAT_INTERVAL_SECONDS", 180)
 
     # Voice chat defaults
     config.setdefault("ENABLE_REPLY_TO_MESSAGE", True)
@@ -1967,6 +1981,32 @@ async def before_shitpost_loop():
 
 
 # ============================================================
+# HEARTBEAT LOOP
+# ============================================================
+
+@tasks.loop(seconds=180)
+async def heartbeat_loop():
+    """Ping the configured heartbeat URL so uptime monitors know the bot is alive."""
+    url = cfg.get("HEARTBEAT_URL", "").strip()
+    if not url:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status < 300:
+                    log("info", f"[HEARTBEAT] Pinged {url} → {resp.status}")
+                else:
+                    print(f"⚠️  Heartbeat ping returned HTTP {resp.status}")
+    except Exception as e:
+        print(f"⚠️  Heartbeat ping failed: {e}")
+
+
+@heartbeat_loop.before_loop
+async def before_heartbeat_loop():
+    await bot.wait_until_ready()
+
+
+# ============================================================
 # BIRTHDAY CHECK LOOP
 # ============================================================
 
@@ -2047,6 +2087,17 @@ async def on_ready():
 
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
+
+    # ── Heartbeat loop ───────────────────────────────────────────────────────
+    hb_url = cfg.get("HEARTBEAT_URL", "").strip()
+    if hb_url:
+        interval = max(10, cfg.get("HEARTBEAT_INTERVAL_SECONDS", 180))
+        heartbeat_loop.change_interval(seconds=interval)
+        if not heartbeat_loop.is_running():
+            heartbeat_loop.start()
+        print(f"   Heartbeat         : ✅ every {interval}s → {hb_url}")
+    else:
+        print(f"   Heartbeat         : ❌ disabled (HEARTBEAT_URL not set)")
 
     # ── Shitpost loop ────────────────────────────────────────────────────────
     if cfg["ENABLE_SHITPOST"]:
@@ -2828,6 +2879,8 @@ if __name__ == "__main__":
     print(f"   Context messages     : last {cfg['LLM_CONTEXT_MESSAGES']} channel msgs per response")
     print(f"   Logging              : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
     print(f"   Shitpost             : {'✅ every ' + str(cfg['SHITPOST_INTERVAL_MINUTES']) + ' min - ch ' + str(cfg['SHITPOST_CHANNEL_ID']) if cfg['ENABLE_SHITPOST'] else '❌ disabled'}")
+    hb_url = cfg.get("HEARTBEAT_URL", "").strip()
+    print(f"   Heartbeat            : {'✅ every ' + str(cfg['HEARTBEAT_INTERVAL_SECONDS']) + 's → ' + hb_url if hb_url else '❌ disabled'}")
     if cfg["ENABLE_LLM"]:
         pct = cfg["LLM_PERCENTAGE"]
         print(f"   LLM percentage       : {'✅ ' + str(cfg['LLM_PERCENTAGE_VALUE']) + '%' if pct else '❌ always answer'}")
