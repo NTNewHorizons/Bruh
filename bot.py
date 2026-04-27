@@ -15,6 +15,8 @@ import json
 from datetime import datetime, timezone, timedelta
 from discord.ext import commands
 from discord import app_commands
+import io
+from PIL import Image, ImageDraw, ImageFont
 
 # ============================================================
 # CONFIGURATION
@@ -1676,6 +1678,122 @@ async def query_llm(
 
 
 # ============================================================
+# DEMOTIVATOR HELPER
+# ============================================================
+
+def _build_demotivator(photo: Image.Image, title: str, subtitle: str = "") -> bytes:
+    """
+    Render a classic demotivational-poster image.
+
+    Layout:
+      • Black background
+      • Photo with thin white border, centered
+      • Title in large white serif below
+      • Optional subtitle in smaller grey serif below that
+    """
+    BORDER = 6    # white border thickness around photo
+    PAD    = 40   # outer padding on all sides
+
+    # ── fonts ────────────────────────────────────────────────
+    SERIF_BOLD = [
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+    ]
+    SERIF_REG = [
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+    ]
+
+    def _font(paths, size):
+        for p in paths:
+            try:
+                return ImageFont.truetype(p, size)
+            except OSError:
+                pass
+        return ImageFont.load_default(size=size)
+
+    title_font = _font(SERIF_BOLD, 48)
+    sub_font   = _font(SERIF_REG,  24)
+
+    # ── scale photo so it fits within 600 px wide ────────────
+    max_w = 600
+    if photo.width > max_w:
+        ratio = max_w / photo.width
+        photo = photo.resize(
+            (int(photo.width * ratio), int(photo.height * ratio)),
+            Image.LANCZOS,
+        )
+
+    W       = photo.width + (BORDER + PAD) * 2
+    inner_w = W - PAD * 2
+
+    # ── measure / wrap text ──────────────────────────────────
+    dummy = Image.new("RGB", (1, 1))
+    d     = ImageDraw.Draw(dummy)
+
+    def wrap(text: str, font) -> list[str]:
+        lines, line = [], ""
+        for word in text.split():
+            test = (line + " " + word).strip()
+            if d.textlength(test, font=font) <= inner_w:
+                line = test
+            else:
+                if line:
+                    lines.append(line)
+                line = word
+        if line:
+            lines.append(line)
+        return lines
+
+    title_lines = wrap(title.upper(), title_font)
+    sub_lines   = wrap(subtitle, sub_font) if subtitle.strip() else []
+
+    LH_TITLE = 56   # line height for title
+    LH_SUB   = 30   # line height for subtitle
+
+    title_block_h = len(title_lines) * LH_TITLE
+    sub_block_h   = (10 + len(sub_lines) * LH_SUB) if sub_lines else 0
+
+    H = (PAD
+         + BORDER + photo.height + BORDER
+         + 20                     # gap between photo and title
+         + title_block_h
+         + sub_block_h
+         + 30)                    # bottom breathing room
+
+    # ── draw ─────────────────────────────────────────────────
+    canvas = Image.new("RGB", (W, H), (0, 0, 0))
+    draw   = ImageDraw.Draw(canvas)
+
+    # white border rectangle
+    bx, by = PAD - BORDER, PAD - BORDER
+    draw.rectangle(
+        [bx, by, bx + photo.width + BORDER * 2, by + photo.height + BORDER * 2],
+        fill="white",
+    )
+    canvas.paste(photo.convert("RGB"), (PAD, PAD))
+
+    # title
+    y = PAD + photo.height + BORDER + 20
+    for line in title_lines:
+        tw = d.textlength(line, font=title_font)
+        draw.text(((W - tw) / 2, y), line, font=title_font, fill="white")
+        y += LH_TITLE
+
+    # subtitle
+    if sub_lines:
+        y += 10
+        for line in sub_lines:
+            tw = d.textlength(line, font=sub_font)
+            draw.text(((W - tw) / 2, y), line, font=sub_font, fill=(180, 180, 180))
+            y += LH_SUB
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# ============================================================
 # BOT SETUP
 # ============================================================
 
@@ -2825,6 +2943,56 @@ async def voice_disconnect(interaction: discord.Interaction):
 
 
 # ============================================================
+# DEMOTIVATOR SLASH COMMAND
+# ============================================================
+
+@bot.tree.command(
+    name="demotivator",
+    description="Turn an image into a demotivational poster",
+    guild=_GUILD,
+)
+@app_commands.describe(
+    image    = "The image to use as the poster photo",
+    title    = "Big title text (e.g. FAILURE)",
+    subtitle = "Optional smaller caption below the title",
+)
+async def demotivator(
+    interaction: discord.Interaction,
+    image:    discord.Attachment,
+    title:    str,
+    subtitle: str = "",
+):
+    # Validate it's actually an image
+    if not image.content_type or not image.content_type.startswith("image/"):
+        await interaction.response.send_message(
+            "❌ That attachment doesn't look like an image.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image.url) as resp:
+                if resp.status != 200:
+                    await interaction.followup.send("❌ Couldn't download the image.")
+                    return
+                img_bytes = await resp.read()
+
+        photo        = Image.open(io.BytesIO(img_bytes))
+        poster_bytes = _build_demotivator(photo, title, subtitle)
+
+        file = discord.File(fp=io.BytesIO(poster_bytes), filename="demotivator.png")
+        await interaction.followup.send(file=file)
+
+        log("info", f"[DEMOTIVATOR] {interaction.user} | title={title!r} | sub={subtitle!r}")
+
+    except Exception as e:
+        log("error", f"[DEMOTIVATOR] {e}")
+        await interaction.followup.send("❌ Something broke while making the poster.")
+
+
+# ============================================================
 # CONTEXT MENU COMMANDS
 # ============================================================
 
@@ -2875,6 +3043,7 @@ if __name__ == "__main__":
     print(f"   Chicken out          : {'✅' if cfg['ENABLE_CHICKEN_OUT'] else '❌'}")
     print(f"   Suggestions          : {'✅' if cfg['ENABLE_SUGGESTIONS'] else '❌'}")
     print(f"   Rape command         : {'✅' if cfg['ENABLE_RAPE_COMMAND'] else '❌'}")
+    print(f"   Demotivator          : ✅ /demotivator enabled")
     print(f"   LLM                  : {'✅ ' + cfg['LLM_PROVIDER'].upper() + ' / ' + cfg['LLM_MODEL'] + (' ☁️' if cfg['LLM_PROVIDER'] == 'ollama_cloud' else '') if cfg['ENABLE_LLM'] else '❌ disabled'}")
     print(f"   Context messages     : last {cfg['LLM_CONTEXT_MESSAGES']} channel msgs per response")
     print(f"   Logging              : {'✅ ' + cfg['LOG_DIR'] + '/' + cfg['LOG_FILE'] if cfg['ENABLE_LOGGING'] else '❌ disabled'}")
