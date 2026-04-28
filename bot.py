@@ -10,6 +10,7 @@ import traceback
 import re
 import aiohttp
 import asyncio
+import base64
 import logging
 import json
 from datetime import datetime, timezone, timedelta
@@ -233,6 +234,14 @@ LLM_PERCENTAGE_VALUE=75
 # Recommended: 15-30. Set to 0 to disable context fetching.
 LLM_CONTEXT_MESSAGES=20
 
+# Enable vision: bot will read image attachments when mentioned
+# Requires a vision-capable model (e.g. gpt-4o, claude-3-5-sonnet-20241022,
+# gemini-1.5-flash, llava for ollama)
+ENABLE_LLM_VISION=false
+
+# Max image size in MB to process (images larger than this are skipped)
+LLM_VISION_MAX_MB=10
+
 # Enable logging of user messages and bot responses to a file
 ENABLE_LOGGING=true
 
@@ -294,7 +303,7 @@ def load_config() -> dict:
         "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE", "LLM_CONTEXT_MESSAGES",
         "SHITPOST_CHANNEL_ID", "SHITPOST_INTERVAL_MINUTES", "GUILD_ID",
         "BIRTHDAY_CHANNEL_ID", "BIRTHDAY_CHECK_HOUR", "ATTENTION_WINDOW_SECONDS",
-        "LLM_DEBOUNCE_SECONDS",
+        "LLM_DEBOUNCE_SECONDS", "LLM_VISION_MAX_MB",
         "VOICE_SOUND_INTERVAL_BASE", "VOICE_SOUND_INTERVAL_VARIANCE",
         "VOICE_ALONE_DISCONNECT_SECONDS",
         "VOICE_SPONTANEOUS_CHECK_INTERVAL", "VOICE_SPONTANEOUS_JOIN_CHANCE",
@@ -306,7 +315,7 @@ def load_config() -> dict:
         "ENABLE_CHICKEN_OUT", "ENABLE_SUGGESTIONS", "ENABLE_RAPE_COMMAND",
         "ENABLE_LLM", "LLM_FALLBACK_ON_ERROR", "LLM_TYPING_INDICATOR",
         "LLM_PERCENTAGE", "ENABLE_LOGGING", "ENABLE_SHITPOST", "ENABLE_BIRTHDAYS",
-        "ENABLE_ATTENTION_WINDOW",
+        "ENABLE_ATTENTION_WINDOW", "ENABLE_LLM_VISION",
         "ENABLE_VOICE", "ENABLE_VOICE_SOUNDS", "ENABLE_VOICE_SPONTANEOUS", "ENABLE_REPLY_TO_MESSAGE",
     }
 
@@ -382,6 +391,8 @@ def load_config() -> dict:
     config.setdefault("LLM_PERCENTAGE_VALUE", 75)
     config.setdefault("LLM_MEMORY_SIZE", 10)
     config.setdefault("LLM_CONTEXT_MESSAGES", 20)
+    config.setdefault("ENABLE_LLM_VISION", False)
+    config.setdefault("LLM_VISION_MAX_MB", 10)
     config.setdefault("ENABLE_LOGGING", True)
     config.setdefault("LOG_DIR", "logs")
     config.setdefault("LOG_FILE", "chat.log")
@@ -1472,6 +1483,63 @@ def _schedule_debounced_reply(
 
 
 # ============================================================
+# VISION HELPERS
+# ============================================================
+
+async def fetch_image_as_base64(url: str, max_mb: int) -> tuple[str, str] | None:
+    """Download an image and return (base64_string, mime_type) or None.
+
+    Skips images larger than max_mb MB. Derives mime_type from Content-Type header,
+    defaulting to 'image/png' if missing.
+    """
+    max_bytes = max_mb * 1024 * 1024
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    log("warning", f"[VISION] Failed to download image: HTTP {resp.status}")
+                    return None
+                data = await resp.read()
+                if len(data) > max_bytes:
+                    log("info", f"[VISION] Skipping image: {len(data)} bytes exceeds {max_mb} MB")
+                    return None
+                mime_type = resp.headers.get("Content-Type", "image/png")
+                if not mime_type.startswith("image/"):
+                    mime_type = "image/png"
+                b64 = base64.b64encode(data).decode("utf-8")
+                return (b64, mime_type)
+    except Exception as e:
+        log("warning", f"[VISION] Error fetching image: {e}")
+        return None
+
+
+async def collect_message_images(message: discord.Message, max_mb: int) -> list[tuple[str, str]]:
+    """Collect images from message attachments and embeds.
+
+    Returns a list of (base64_data, mime_type) tuples.
+    """
+    images: list[tuple[str, str]] = []
+
+    # Check attachments
+    for attachment in message.attachments:
+        if attachment.content_type and attachment.content_type.startswith("image/"):
+            result = await fetch_image_as_base64(attachment.url, max_mb)
+            if result:
+                images.append(result)
+
+    # Check embeds for image/thumbnail URLs
+    for embed in message.embeds:
+        for url in (embed.image.url, embed.thumbnail.url):
+            if url:
+                result = await fetch_image_as_base64(url, max_mb)
+                if result:
+                    images.append(result)
+
+    log("info", f"[VISION] Collected {len(images)} image(s) from message")
+    return images
+
+
+# ============================================================
 # LLM CLIENT
 # ============================================================
 
@@ -1501,7 +1569,7 @@ def _build_messages(
     return msgs_out
 
 
-async def _query_ollama(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
+async def _query_ollama(messages: list[dict], session: aiohttp.ClientSession, images: list[tuple[str, str]] | None = None) -> str | None:
     url = f"{cfg['LLM_BASE_URL']}/api/chat"
     payload = {
         "model": cfg["LLM_MODEL"],
@@ -1509,6 +1577,14 @@ async def _query_ollama(messages: list[dict], session: aiohttp.ClientSession) ->
         "options": {"num_predict": cfg["LLM_MAX_TOKENS"]},
         "messages": messages,
     }
+
+    # Vision support: add images to last user message
+    if images:
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                messages[i]["images"] = [b64 for b64, _ in images]
+                break
+
     async with session.post(url, json=payload) as resp:
         if resp.status != 200:
             print(f"❌ Ollama returned HTTP {resp.status}: {await resp.text()}")
@@ -1517,7 +1593,7 @@ async def _query_ollama(messages: list[dict], session: aiohttp.ClientSession) ->
         return data.get("message", {}).get("content", "").strip()
 
 
-async def _query_ollama_cloud(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
+async def _query_ollama_cloud(messages: list[dict], session: aiohttp.ClientSession, images: list[tuple[str, str]] | None = None) -> str | None:
     """Query the Ollama Cloud API at ollama.com using Bearer token auth.
 
     Note: 'options' (num_predict etc.) is a local-Ollama-only field.
@@ -1538,6 +1614,13 @@ async def _query_ollama_cloud(messages: list[dict], session: aiohttp.ClientSessi
         "stream": False,
         "messages": messages,
     }
+
+    # Vision support: add images to last user message (same as ollama)
+    if images:
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                messages[i]["images"] = [b64 for b64, _ in images]
+                break
     async with session.post(url, json=payload, headers=headers) as resp:
         if resp.status == 401:
             print("❌ Ollama Cloud: Unauthorized - check your LLM_API_KEY.")
@@ -1553,11 +1636,25 @@ async def _query_ollama_cloud(messages: list[dict], session: aiohttp.ClientSessi
 
 
 async def _query_openai_compat(messages: list[dict], session: aiohttp.ClientSession,
-                                base_url: str, api_key: str) -> str | None:
+                                 base_url: str, api_key: str, images: list[tuple[str, str]] | None = None) -> str | None:
     url = f"{base_url.rstrip('/')}/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+
+    # Vision support: change last user message to multimodal content
+    if images:
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                original_text = messages[i]["content"]
+                content = [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                    for b64, mime in images
+                ]
+                content.append({"type": "text", "text": original_text})
+                messages[i]["content"] = content
+                break
+
     payload = {
         "model": cfg["LLM_MODEL"],
         "max_tokens": cfg["LLM_MAX_TOKENS"],
@@ -1571,7 +1668,7 @@ async def _query_openai_compat(messages: list[dict], session: aiohttp.ClientSess
         return data["choices"][0]["message"]["content"].strip()
 
 
-async def _query_anthropic(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
+async def _query_anthropic(messages: list[dict], session: aiohttp.ClientSession, images: list[tuple[str, str]] | None = None) -> str | None:
     system_text = ""
     chat_messages = []
     for m in messages:
@@ -1579,6 +1676,19 @@ async def _query_anthropic(messages: list[dict], session: aiohttp.ClientSession)
             system_text = m["content"]
         else:
             chat_messages.append(m)
+
+    # Vision support: change last user message to multimodal content
+    if images:
+        for i in range(len(chat_messages) - 1, -1, -1):
+            if chat_messages[i]["role"] == "user":
+                original_text = chat_messages[i]["content"]
+                content = [
+                    {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}}
+                    for b64, mime in images
+                ]
+                content.append({"type": "text", "text": original_text})
+                chat_messages[i]["content"] = content
+                break
 
     url = f"{cfg['LLM_BASE_URL'].rstrip('/')}/v1/messages"
     headers = {
@@ -1600,7 +1710,7 @@ async def _query_anthropic(messages: list[dict], session: aiohttp.ClientSession)
         return data["content"][0]["text"].strip()
 
 
-async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession) -> str | None:
+async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession, images: list[tuple[str, str]] | None = None) -> str | None:
     system_text = ""
     contents = []
     for m in messages:
@@ -1609,6 +1719,14 @@ async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession) ->
         else:
             role = "model" if m["role"] == "assistant" else "user"
             contents.append({"role": role, "parts": [{"text": m["content"]}]})
+
+    # Vision support: add inline_data to last user content parts
+    if images:
+        for i in range(len(contents) - 1, -1, -1):
+            if contents[i]["role"] == "user":
+                for b64, mime in images:
+                    contents[i]["parts"].insert(0, {"inline_data": {"mime_type": mime, "data": b64}})
+                break
 
     url = (
         f"{cfg['LLM_BASE_URL'].rstrip('/')}/v1beta/models/"
@@ -1635,6 +1753,7 @@ async def query_llm(
     history: list[dict],
     extra_system_prompt: str = "",
     channel_name: str = "",
+    images: list[tuple[str, str]] | None = None,
 ) -> str | None:
     provider = cfg.get("LLM_PROVIDER", "ollama").lower()
     messages = _build_messages(prompt, user_identity, history, extra_system_prompt, channel_name)
@@ -1644,22 +1763,23 @@ async def query_llm(
         async with aiohttp.ClientSession(timeout=timeout) as session:
 
             if provider == "ollama":
-                return await _query_ollama(messages, session)
+                return await _query_ollama(messages, session, images)
 
             elif provider == "ollama_cloud":
-                return await _query_ollama_cloud(messages, session)
+                return await _query_ollama_cloud(messages, session, images)
 
             elif provider == "anthropic":
-                return await _query_anthropic(messages, session)
+                return await _query_anthropic(messages, session, images)
 
             elif provider == "gemini":
-                return await _query_gemini(messages, session)
+                return await _query_gemini(messages, session, images)
 
             elif provider in ("openai", "lmstudio", "groq", "openrouter", "openai_compat"):
                 return await _query_openai_compat(
                     messages, session,
                     base_url=cfg["LLM_BASE_URL"],
                     api_key=cfg.get("LLM_API_KEY", ""),
+                    images=images,
                 )
 
             else:
@@ -2186,9 +2306,12 @@ async def on_ready():
         print(f"   Voice             : ✅ sounds={len(voice_manager.sounds)} | "
               f"interval={cfg['VOICE_SOUND_INTERVAL_BASE']}±{cfg['VOICE_SOUND_INTERVAL_VARIANCE']}s | "
               f"alone-timeout={cfg['VOICE_ALONE_DISCONNECT_SECONDS']}s")
+        print(f"   Vision              : {'✅ enabled (max ' + str(cfg['LLM_VISION_MAX_MB']) + ' MB/image)' if cfg['ENABLE_LLM_VISION'] else '❌ disabled'}")
     else:
         voice_manager = None
         print(f"   Voice             : ❌ disabled")
+        print(f"   Vision              : {'✅ enabled (max ' + str(cfg['LLM_VISION_MAX_MB']) + ' MB/image)' if cfg['ENABLE_LLM_VISION'] else '❌ disabled'}")
+
 
     # ── Auto-fix duplicates before syncing ──────────────────────────────────
     await fix_duplicate_commands()
@@ -2364,6 +2487,17 @@ async def handle_llm_mention(
     # Resolve @mentions in the prompt itself (e.g. "who is <@123>" → "who is <Bufka2011>")
     prompt = resolve_mentions(prompt, guild)
 
+    # Collect images if vision is enabled
+    images = []
+    if cfg.get("ENABLE_LLM_VISION") and cfg.get("ENABLE_LLM"):
+        images = await collect_message_images(
+            message, cfg.get("LLM_VISION_MAX_MB", 10)
+        )
+
+    # Prepend vision context to prompt if images found
+    if images:
+        prompt = f"[The user sent {len(images)} image(s). Describe and respond to them.]\n" + prompt
+
     history = await fetch_channel_context(
         message.channel, message, bot.user,
         limit=context_limit,
@@ -2397,12 +2531,14 @@ async def handle_llm_mention(
                     prompt, user_identity, history,
                     channel_name=channel_name,
                     extra_system_prompt=voice_extra,
+                    images=images,
                 )
         else:
             response = await query_llm(
                 prompt, user_identity, history,
                 channel_name=channel_name,
                 extra_system_prompt=voice_extra,
+                images=images,
             )
 
         if not response:
@@ -2603,7 +2739,8 @@ async def llm_status(interaction: discord.Interaction):
                     await interaction.followup.send(
                         f"**Provider:** Ollama ✅ Connected\n"
                         f"**Active model:** `{model}` - {status}\n"
-                        f"**Installed models:** `{model_list}`",
+                        f"**Installed models:** `{model_list}`"
+                        f"\n**Vision:** {'✅ enabled' if cfg.get('ENABLE_LLM_VISION') else '❌ disabled'}",
                         ephemeral=True,
                     )
 
@@ -2630,7 +2767,8 @@ async def llm_status(interaction: discord.Interaction):
                         f"**Base URL:** `{base_url}`\n"
                         f"**Active model:** `{model}` - {status}\n"
                         f"**API key:** {key_hint}\n"
-                        f"**Available models (sample):** `{model_list or 'none returned'}`",
+                        f"**Available models (sample):** `{model_list or 'none returned'}`"
+                        f"\n**Vision:** {'✅ enabled' if cfg.get('ENABLE_LLM_VISION') else '❌ disabled'}",
                         ephemeral=True,
                     )
 
@@ -2651,7 +2789,8 @@ async def llm_status(interaction: discord.Interaction):
                         await interaction.followup.send(
                             f"**Provider:** Anthropic ✅ Connected\n"
                             f"**Model:** `{model}`\n"
-                            f"**API key:** {key_hint}",
+                            f"**API key:** {key_hint}"
+                            f"\n**Vision:** {'✅ enabled' if cfg.get('ENABLE_LLM_VISION') else '❌ disabled'}",
                             ephemeral=True,
                         )
                     else:
@@ -2673,7 +2812,8 @@ async def llm_status(interaction: discord.Interaction):
                             f"**Provider:** Gemini ✅ Connected\n"
                             f"**Active model:** `{model}` - {status}\n"
                             f"**API key:** {key_hint}\n"
-                            f"**Available models (sample):** `{model_list or 'none returned'}`",
+                            f"**Available models (sample):** `{model_list or 'none returned'}`"
+                            f"\n**Vision:** {'✅ enabled' if cfg.get('ENABLE_LLM_VISION') else '❌ disabled'}",
                             ephemeral=True,
                         )
                     else:
