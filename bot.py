@@ -47,6 +47,12 @@ GUILD_ID=
 DEFAULT_MSGS_FILE=default_msgs.txt
 MENTION_MSGS_FILE=mention_msgs.txt
 
+# --- Prefix Commands ---
+# Folder containing .txt files for prefix commands (relative to bot script directory).
+# When a user types !<name>, the bot looks for <name>.txt in this folder and sends its contents.
+# Example: user types !rules → bot sends contents of commands/rules.txt
+COMMANDS_FOLDER=commands
+
 
 
 # --- Channel IDs ---
@@ -61,6 +67,13 @@ AUTO_THREAD_CHANNEL_ID=
 
 # Channel where "chicken out" messages are sent when someone leaves shortly after joining
 CHICKEN_OUT_CHANNEL_ID=
+
+# Channel ID of the honeypot channel.
+# Anyone (except bots and admins) who sends a message there is instantly kicked and their message deleted.
+HONEYPOT_CHANNEL_ID=
+
+# Enable or disable the honeypot feature
+ENABLE_HONEYPOT=false
 
 
 
@@ -280,6 +293,26 @@ ENABLE_VOICE_SOUNDS=true
 
 # Seconds bot waits alone in voice before auto-disconnecting
 VOICE_ALONE_DISCONNECT_SECONDS=30
+
+
+
+# --- Voice: Random (Spontaneous) Joins ---
+# Enable the bot randomly joining populated voice channels on its own
+ENABLE_VOICE_SPONTANEOUS=true
+
+# How often (in seconds) the bot checks whether to spontaneously join a voice channel
+# Minimum enforced value: 30 seconds
+VOICE_SPONTANEOUS_CHECK_INTERVAL=300
+
+# Percentage chance (1-100) to actually join when a populated channel is found during a check
+# Example: 25 = 25% chance per check cycle
+VOICE_SPONTANEOUS_JOIN_CHANCE=25
+
+# Minimum seconds the bot stays in the channel after a spontaneous join
+VOICE_SPONTANEOUS_MIN_STAY=60
+
+# Maximum seconds the bot stays in the channel after a spontaneous join
+VOICE_SPONTANEOUS_MAX_STAY=300
 """
 
 
@@ -298,7 +331,7 @@ def load_config() -> dict:
     config = {}
     numeric_keys = {
         "SUGGESTION_CHANNEL_ID", "RAPE_CHANNEL_ID", "AUTO_THREAD_CHANNEL_ID",
-        "CHICKEN_OUT_CHANNEL_ID", "SUGGESTION_PING_ROLE_ID", "AUTHORIZED_USER_ID",
+        "CHICKEN_OUT_CHANNEL_ID", "HONEYPOT_CHANNEL_ID", "SUGGESTION_PING_ROLE_ID", "AUTHORIZED_USER_ID",
         "RANDOM_MESSAGE_CHANCE", "CHICKEN_OUT_TIMEOUT", "LLM_MAX_TOKENS", "LLM_TIMEOUT",
         "LLM_PERCENTAGE_VALUE", "LLM_MEMORY_SIZE", "LLM_CONTEXT_MESSAGES",
         "SHITPOST_CHANNEL_ID", "SHITPOST_INTERVAL_MINUTES", "GUILD_ID",
@@ -312,7 +345,7 @@ def load_config() -> dict:
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
-        "ENABLE_CHICKEN_OUT", "ENABLE_SUGGESTIONS", "ENABLE_RAPE_COMMAND",
+        "ENABLE_CHICKEN_OUT", "ENABLE_HONEYPOT", "ENABLE_SUGGESTIONS", "ENABLE_RAPE_COMMAND",
         "ENABLE_LLM", "LLM_FALLBACK_ON_ERROR", "LLM_TYPING_INDICATOR",
         "LLM_PERCENTAGE", "ENABLE_LOGGING", "ENABLE_SHITPOST", "ENABLE_BIRTHDAYS",
         "ENABLE_ATTENTION_WINDOW", "ENABLE_LLM_VISION",
@@ -355,6 +388,7 @@ def load_config() -> dict:
 
     # Defaults for optional fields
     config.setdefault("COMMAND_PREFIX", "!")
+    config.setdefault("COMMANDS_FOLDER", "commands")
     config.setdefault("GUILD_ID", 0)
     config.setdefault("CHICKEN_OUT_TIMEOUT", 900)
     config.setdefault("CHICKENED_OUT_MSG", "https://tenor.com/view/walk-away-gif-8390063")
@@ -428,6 +462,8 @@ def load_config() -> dict:
 
     # Voice chat defaults
     config.setdefault("ENABLE_REPLY_TO_MESSAGE", True)
+    config.setdefault("ENABLE_HONEYPOT", False)
+    config.setdefault("HONEYPOT_CHANNEL_ID", 0)
     config.setdefault("ENABLE_VOICE", False)
     config.setdefault("SOUNDS_FOLDER", "sounds")
     config.setdefault("VOICE_SOUND_INTERVAL_BASE", 45)
@@ -2371,6 +2407,68 @@ async def on_message(message: discord.Message):
     if message.author == bot.user:
         return
 
+    # --- Honeypot channel ---
+    # Delete the message and kick the user the instant they post anything here.
+    # Bots and server administrators are exempt.
+    if (
+        cfg.get("ENABLE_HONEYPOT")
+        and cfg.get("HONEYPOT_CHANNEL_ID")
+        and hasattr(message.channel, "id")
+        and message.channel.id == cfg["HONEYPOT_CHANNEL_ID"]
+        and not message.author.bot
+    ):
+        # Admins are exempt — they may need to configure the channel
+        is_admin = (
+            isinstance(message.author, discord.Member)
+            and message.author.guild_permissions.administrator
+        )
+        if not is_admin:
+            try:
+                await message.delete()
+            except (discord.Forbidden, discord.NotFound):
+                pass
+
+            try:
+                await message.author.kick(
+                    reason="Honeypot: sent a message in a restricted channel"
+                )
+                log(
+                    "info",
+                    f"[HONEYPOT] Kicked {message.author} ({message.author.id}) "
+                    f"for posting in #{getattr(message.channel, 'name', message.channel.id)}"
+                )
+                print(
+                    f"🍯 [HONEYPOT] Kicked {message.author} "
+                    f"(#{getattr(message.channel, 'name', message.channel.id)})"
+                )
+            except discord.Forbidden:
+                log(
+                    "warning",
+                    f"[HONEYPOT] Missing permission to kick {message.author} ({message.author.id})"
+                )
+                print(f"❌ [HONEYPOT] No permission to kick {message.author}")
+            except Exception as e:
+                log("error", f"[HONEYPOT] Unexpected error kicking {message.author}: {e}")
+            return  # Stop all further processing for this message
+
+    # --- Prefix commands (!<name> → send contents of commands/<name>.txt) ---
+    prefix = cfg.get("COMMAND_PREFIX", "!")
+    if message.content.startswith(prefix):
+        command_name = message.content[len(prefix):].split()[0].lower() if message.content[len(prefix):].split() else ""
+        if command_name:
+            commands_dir = BOT_DIR / cfg.get("COMMANDS_FOLDER", "commands")
+            command_file = commands_dir / f"{command_name}.txt"
+            if command_file.is_file():
+                try:
+                    content = command_file.read_text(encoding="utf-8").strip()
+                    if content:
+                        await message.channel.send(content)
+                        log("info", f"[CMD] #{getattr(message.channel, 'name', message.channel.id)} "
+                                    f"| {format_user_identity(message)} used !{command_name}")
+                except Exception as e:
+                    log("error", f"[CMD] Failed to send !{command_name}: {e}")
+                return  # Don't process further (random msgs, LLM, etc.)
+
     user_identity = format_user_identity(message)
     channel_info = f"#{message.channel}" if hasattr(message.channel, 'name') else "DM"
 
@@ -3173,6 +3271,7 @@ async def rape_member_ctx(interaction: discord.Interaction, member: discord.Memb
 if __name__ == "__main__":
     print("🚀 Starting Bruh Bot...")
     print(f"   Prefix               : {cfg['COMMAND_PREFIX']}")
+    print(f"   Commands folder      : {cfg['COMMANDS_FOLDER']}/")
     print(f"   Guild ID             : {cfg['GUILD_ID'] if cfg['GUILD_ID'] else '❌ not set (all commands global)'}")
     print(f"   Random msg chance    : 1 in {cfg['RANDOM_MESSAGE_CHANCE']}")
     print(f"   Chicken-out timeout  : {cfg['CHICKEN_OUT_TIMEOUT']}s")
@@ -3181,6 +3280,7 @@ if __name__ == "__main__":
     print(f"   Mention responses    : {'✅' if cfg['ENABLE_MENTION_RESPONSES'] else '❌'}")
     print(f"   Auto-thread          : {'✅' if cfg['ENABLE_AUTO_THREAD'] else '❌'}")
     print(f"   Chicken out          : {'✅' if cfg['ENABLE_CHICKEN_OUT'] else '❌'}")
+    print(f"   Honeypot             : {'✅ ch ' + str(cfg['HONEYPOT_CHANNEL_ID']) if cfg['ENABLE_HONEYPOT'] and cfg['HONEYPOT_CHANNEL_ID'] else ('⚠️  enabled but HONEYPOT_CHANNEL_ID not set' if cfg['ENABLE_HONEYPOT'] else '❌')}")
     print(f"   Suggestions          : {'✅' if cfg['ENABLE_SUGGESTIONS'] else '❌'}")
     print(f"   Rape command         : {'✅' if cfg['ENABLE_RAPE_COMMAND'] else '❌'}")
     print(f"   Demotivator          : ✅ /demotivator enabled")
@@ -3213,6 +3313,12 @@ if __name__ == "__main__":
               f"folder={cfg['SOUNDS_FOLDER']} | "
               f"interval={cfg['VOICE_SOUND_INTERVAL_BASE']}±{cfg['VOICE_SOUND_INTERVAL_VARIANCE']}s | "
               f"alone-timeout={cfg['VOICE_ALONE_DISCONNECT_SECONDS']}s")
+        if cfg.get("ENABLE_VOICE_SPONTANEOUS"):
+            print(f"   Voice (random join)  : ✅ check={cfg['VOICE_SPONTANEOUS_CHECK_INTERVAL']}s | "
+                  f"chance={cfg['VOICE_SPONTANEOUS_JOIN_CHANCE']}% | "
+                  f"stay={cfg['VOICE_SPONTANEOUS_MIN_STAY']}-{cfg['VOICE_SPONTANEOUS_MAX_STAY']}s")
+        else:
+            print(f"   Voice (random join)  : ❌ disabled")
     else:
         print(f"   Voice                : ❌ disabled")
 
