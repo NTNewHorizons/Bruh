@@ -479,7 +479,28 @@ def load_config() -> dict:
     return config
 
 
+# ============================================================
+# SYSTEM PROMPT: can be inline in config.txt OR in PROMPT.txt
+# ============================================================
+
+PROMPT_FILE = "PROMPT.txt"
+
+
+def load_system_prompt() -> str:
+    """Read system prompt from PROMPT.txt.
+    If the file doesn't exist, fall back to LLM_SYSTEM_PROMPT from config.
+    """
+    prompt_path = BOT_DIR / PROMPT_FILE
+    if prompt_path.exists():
+        text = prompt_path.read_text(encoding="utf-8").strip()
+        if text:
+            print(f"✅ Loaded system prompt from {PROMPT_FILE} ({len(text)} chars)")
+            return text
+    return cfg.get("LLM_SYSTEM_PROMPT", "")
+
+
 cfg = load_config()
+cfg["LLM_SYSTEM_PROMPT"] = load_system_prompt()
 
 # Guild object used for guild-specific command registration (instant sync).
 _GUILD: discord.Object | None = discord.Object(id=cfg["GUILD_ID"]) if cfg.get("GUILD_ID") else None

@@ -216,7 +216,7 @@ Additional keys control AI behaviour when `ENABLE_LLM` is enabled:
 | `LLM_API_KEY` | API key for cloud providers. Leave blank for `ollama` and `lmstudio`. For `ollama_cloud`, get your key at ollama.com/settings/keys. |
 | `LLM_BASE_URL` | Override the default endpoint URL. |
 | `LLM_MODEL` | Model name (e.g. `mistral`, `gpt-4o`, `claude-3-5-sonnet-20241022`). |
-| `LLM_SYSTEM_PROMPT` | System prompt defining the bot's personality. |
+| `LLM_SYSTEM_PROMPT` | System prompt defining the bot's personality. Can also be provided via a separate `PROMPT.txt` file (see [System Prompt File](#system-prompt-file)). |
 | `LLM_MAX_TOKENS` | Max tokens per response. |
 | `LLM_TIMEOUT` | Seconds to wait for a reply. |
 | `LLM_FALLBACK_ON_ERROR` | Use a random mention message if the LLM call fails. |
@@ -241,9 +241,20 @@ Additional keys control AI behaviour when `ENABLE_LLM` is enabled:
 | `openrouter` | `https://openrouter.ai/api` |
 | `gemini` | `https://generativelanguage.googleapis.com` |
 
-> **ℹ️ On memory:** The bot does not keep a private per-user history. Instead it reads the last `LLM_CONTEXT_MESSAGES` real Discord messages from the channel before every response. Context survives bot restarts automatically and includes messages from all users in the chat, giving the bot full group-chat awareness. See [6.8 LLM Responses](#68-llm-responses) for details.
+### System Prompt File
+
+As an alternative to setting `LLM_SYSTEM_PROMPT` directly in `config.txt`, you can place the system prompt in a separate file named `PROMPT.txt` in the same directory as `bot.py`. If `PROMPT.txt` exists and is non-empty, its contents **override** the `LLM_SYSTEM_PROMPT` config value entirely.
+
+This is useful for:
+- Keeping long system prompts separate from the main config.
+- Version-controlling the prompt independently.
+- Switching prompts without editing `config.txt`.
+
+> **ℹ️ Priority:** `PROMPT.txt` takes precedence over `LLM_SYSTEM_PROMPT` in `config.txt`. If the file does not exist or is empty, the config value is used as a fallback.
 
 ---
+
+
 
 ### Birthday Configuration
 
@@ -629,6 +640,7 @@ Set `HEARTBEAT_URL` to a ping endpoint (e.g. from Kener, UptimeRobot, or Healthc
 ```
 bot.py                  ← main bot file (single file)
 config.txt              ← configuration (auto-generated on first run)
+PROMPT.txt              ← optional system prompt file (overrides LLM_SYSTEM_PROMPT in config.txt)
 default_msgs.txt        ← default random response messages
 mention_msgs.txt        ← mention response messages (LLM fallback)
 birthday_data.json      ← birthday store (auto-created when first birthday is set)
