@@ -184,9 +184,10 @@ ENABLE_LLM=false
 #   openrouter    - OpenRouter.ai (access 200+ models)
 #   gemini        - Google Gemini (gemini-1.5-flash, gemini-1.5-pro, ...)
 #   openai_compat - Any OpenAI-compatible API (custom base URL + optional key)
+#   openmodel     - OpenModel (api.openmodel.ai) - OpenAI Responses API
 LLM_PROVIDER=ollama
 
-# API key - required for openai / anthropic / groq / openrouter / gemini / ollama_cloud.
+# API key - required for openai / anthropic / groq / openrouter / gemini / ollama_cloud / openmodel.
 # Leave blank for ollama and lmstudio (no key needed).
 # For ollama_cloud: get your key at https://ollama.com/settings/keys
 LLM_API_KEY=
@@ -201,6 +202,7 @@ LLM_API_KEY=
 #   groq default     : https://api.groq.com/openai
 #   openrouter default: https://openrouter.ai/api
 #   gemini default   : https://generativelanguage.googleapis.com
+#   openmodel default  : https://api.openmodel.ai
 LLM_BASE_URL=
 
 # Model to use. Examples per provider:
@@ -410,6 +412,7 @@ def load_config() -> dict:
         "openrouter":    "https://openrouter.ai/api",
         "gemini":        "https://generativelanguage.googleapis.com",
         "openai_compat": "http://localhost:8080",
+        "openmodel":     "https://api.openmodel.ai",
     }
     provider = config.get("LLM_PROVIDER", "ollama").lower()
     if not config.get("LLM_BASE_URL"):
@@ -1804,6 +1807,62 @@ async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession, im
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
+async def _query_openmodel(messages: list[dict], session: aiohttp.ClientSession, images: list[tuple[str, str]] | None = None) -> str | None:
+    api_key = cfg.get("LLM_API_KEY", "").strip()
+    if not api_key:
+        print("❌ openmodel requires LLM_API_KEY. Get one at https://console.openmodel.ai")
+        return None
+
+    url = f"{cfg['LLM_BASE_URL'].rstrip('/')}/v1/responses"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    # Extract system message as instructions
+    instructions = ""
+    input_items = []
+    images_applied = False
+    for m in messages:
+        if m["role"] == "system":
+            instructions = m["content"]
+        else:
+            role = m["role"]
+            text = m["content"]
+            if images and not images_applied and role == "user":
+                content = []
+                for b64, mime in images:
+                    content.append({"type": "input_image", "image_url": f"data:{mime};base64,{b64}"})
+                content.append({"type": "input_text", "text": text})
+                input_items.append({"role": role, "content": content})
+                images_applied = True
+                continue
+            content_type = "input_text" if role == "user" else "output_text"
+            input_items.append({"role": role, "content": [{"type": content_type, "text": text}]})
+
+    payload: dict = {
+        "model": cfg["LLM_MODEL"],
+        "input": input_items,
+        "max_output_tokens": cfg["LLM_MAX_TOKENS"],
+    }
+    if instructions:
+        payload["instructions"] = instructions
+
+    async with session.post(url, json=payload, headers=headers) as resp:
+        if resp.status == 401:
+            print("❌ openmodel: Unauthorized - check your LLM_API_KEY.")
+            return None
+        if resp.status != 200:
+            print(f"❌ openmodel returned HTTP {resp.status}: {await resp.text()}")
+            return None
+        data = await resp.json()
+        try:
+            return data["output"][0]["content"][0]["text"].strip()
+        except (KeyError, IndexError) as e:
+            print(f"❌ openmodel: unexpected response format: {data}")
+            return None
+
+
 async def query_llm(
     prompt: str,
     user_identity: str,
@@ -1838,6 +1897,9 @@ async def query_llm(
                     api_key=cfg.get("LLM_API_KEY", ""),
                     images=images,
                 )
+
+            elif provider == "openmodel":
+                return await _query_openmodel(messages, session, images)
 
             else:
                 print(f"❌ Unknown LLM_PROVIDER '{provider}'.")
@@ -2883,6 +2945,34 @@ async def llm_status(interaction: discord.Interaction):
                     status = "✅ found" if is_available else "⚠️ not in list"
                     await interaction.followup.send(
                         f"**Provider:** {provider.upper()} ✅ Connected\n"
+                        f"**Base URL:** `{base_url}`\n"
+                        f"**Active model:** `{model}` - {status}\n"
+                        f"**API key:** {key_hint}\n"
+                        f"**Available models (sample):** `{model_list or 'none returned'}`"
+                        f"\n**Vision:** {'✅ enabled' if cfg.get('ENABLE_LLM_VISION') else '❌ disabled'}",
+                        ephemeral=True,
+                    )
+
+            elif provider == "openmodel":
+                headers = {}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                url = f"{base_url.rstrip('/')}/v1/models"
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        await interaction.followup.send(
+                            f"⚠️ OpenModel responded with HTTP {resp.status}\n"
+                            f"`{await resp.text()[:300]}`",
+                            ephemeral=True,
+                        )
+                        return
+                    data = await resp.json()
+                    model_ids = [m.get("id", "?") for m in data.get("data", [])]
+                    model_list = ", ".join(model_ids[:15]) + ("..." if len(model_ids) > 15 else "")
+                    is_available = any(model in mid for mid in model_ids)
+                    status = "✅ found" if is_available else "⚠️ not in list"
+                    await interaction.followup.send(
+                        f"**Provider:** OpenModel ✅ Connected\n"
                         f"**Base URL:** `{base_url}`\n"
                         f"**Active model:** `{model}` - {status}\n"
                         f"**API key:** {key_hint}\n"
