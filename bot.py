@@ -1767,7 +1767,11 @@ async def _query_anthropic(messages: list[dict], session: aiohttp.ClientSession,
             print(f"❌ Anthropic returned HTTP {resp.status}: {await resp.text()}")
             return None
         data = await resp.json()
-        return data["content"][0]["text"].strip()
+        for block in data["content"]:
+            if block["type"] == "text":
+                return block["text"].strip()
+        print(f"❌ Anthropic: no text block in response: {data}")
+        return None
 
 
 async def _query_gemini(messages: list[dict], session: aiohttp.ClientSession, images: list[tuple[str, str]] | None = None) -> str | None:
