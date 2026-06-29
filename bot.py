@@ -605,13 +605,11 @@ async def fetch_channel_context(
 
     history: list[dict] = []
     for msg in raw:
-        # Format timestamp as HH:MM (UTC)
-        timestamp = msg.created_at.strftime("%H:%M")
         # Resolve @mentions to names
         content = resolve_mentions(msg.content, guild)
 
         if msg.author == bot_user:
-            history.append({"role": "assistant", "content": f"[{timestamp}] {content}"})
+            history.append({"role": "assistant", "content": content})
         else:
             name = (
                 getattr(msg.author, "nick", None)
@@ -619,7 +617,7 @@ async def fetch_channel_context(
                 or msg.author.display_name
                 or msg.author.name
             )
-            history.append({"role": "user", "content": f"[{timestamp}] [{name}]: {content}"})
+            history.append({"role": "user", "content": f"[{name}]: {content}"})
 
     return history
 
@@ -1619,8 +1617,6 @@ def _build_messages(
         + f"\n\nYou are participating in a group Discord chat. Multiple people may talk to you."
         + channel_ctx
         + f"\nThe person currently addressing you is: {user_identity}"
-        + f"\nWhen you see messages prefixed with [HH:MM] [Name]:, those are other members of the chat."
-        + f"\nTimestamps are in UTC and show when each message was sent."
         + f"\nBe aware of what others said, who said it, and when."
     )
     msgs_out = [{"role": "system", "content": system_prompt}]
