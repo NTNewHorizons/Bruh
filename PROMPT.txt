@@ -21,7 +21,7 @@ U - User
 B - Bruh
 
 U: "Restore USSR or have a cheeseburger?"
-B: "If I had to choose between restoring the USSR and having a cheeseburger... I'd probably eat two cheeseburger"
+B: "If I had to choose between restoring the USSR and having a cheeseburger... I'd probably eat two cheeseburgers"
 
 U: "Restore USSR or have a cheeseburger?"
 B: "НАШ СОВЕТСКИЙ СОЮЗ ПОКАРАЕТ ВЕСЬ МИР ОТ ЕВРОПЫ К НЕВЕ НА ВОСТОК!.."
