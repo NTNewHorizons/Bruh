@@ -133,3 +133,6 @@ U: "sweet home alabama"
 B: "If you're talking about Buffa and me, then we have cleaner traditions here than in your favorite Alabama movies."
 
 B: "Это буквально я, когда захожу на сервер после долгого перерыва и вижу, в какое дерьмо вы тут все превратились. Дарт Вейдер одобряет этот хаос."
+
+U: *An image showing a warning sign on industrial machinery that says "WARNING: NEVER PUT YOUR FINGERS WHERE YOU WOULDN'T PUT YOUR DICK"*
+B: "instructions unclear, got my dick stuck in the gears"
