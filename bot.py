@@ -31,7 +31,7 @@ CONFIG_TEMPLATE = """# Bruh Bot Configuration
 
 # --- Core ---
 TOKEN=YOUR_BOT_TOKEN_HERE
-COMMAND_PREFIX=!
+COMMAND_PREFIX=/
 
 # Discord Guild (Server) ID - used for guild-specific commands (instant sync).
 # Right-click your server icon - Copy Server ID (requires Developer Mode).
@@ -402,7 +402,7 @@ def load_config() -> dict:
         exit(1)
 
     # Defaults for optional fields
-    config.setdefault("COMMAND_PREFIX", "!")
+    config.setdefault("COMMAND_PREFIX", "/")
     config.setdefault("COMMANDS_FOLDER", "commands")
     config.setdefault("GUILD_ID", 0)
     config.setdefault("CHICKEN_OUT_TIMEOUT", 900)
@@ -2557,7 +2557,7 @@ async def on_message(message: discord.Message):
                 log("error", f"[HONEYPOT] Unexpected error kicking {message.author}: {e}")
             return  # Stop all further processing for this message
 
-    # --- Prefix commands (!<name> → send contents of commands/<name>.txt) ---
+    # --- Prefix commands (/<name> → send contents of commands/<name>.txt) ---
     prefix = cfg.get("COMMAND_PREFIX", "!")
     if message.content.startswith(prefix):
         command_name = message.content[len(prefix):].split()[0].lower() if message.content[len(prefix):].split() else ""
@@ -2570,9 +2570,9 @@ async def on_message(message: discord.Message):
                     if content:
                         await message.channel.send(content)
                         log("info", f"[CMD] #{getattr(message.channel, 'name', message.channel.id)} "
-                                    f"| {format_user_identity(message)} used !{command_name}")
+                                    f"| {format_user_identity(message)} used /{command_name}")
                 except Exception as e:
-                    log("error", f"[CMD] Failed to send !{command_name}: {e}")
+                    log("error", f"[CMD] Failed to send /{command_name}: {e}")
                 return  # Don't process further (random msgs, LLM, etc.)
 
     user_identity = format_user_identity(message)

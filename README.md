@@ -122,7 +122,7 @@ All configuration lives in `config.txt` next to `bot.py`. Lines beginning with `
 | Key | Description |
 |---|---|
 | `TOKEN` | Your Discord bot token **(required)**. |
-| `COMMAND_PREFIX` | Prefix for text commands. Default: `!` |
+| `COMMAND_PREFIX` | Prefix for text commands. Default: `/` |
 
 ### Message Files
 
@@ -271,9 +271,9 @@ When `ENABLE_CHICKEN_OUT=true`, the bot records a timestamp when each member joi
 
 ---
 
-### 6.7 !hbm Command
+### 6.7 /hbm Command
 
-A simple prefix command. When a user types `!hbm`, the bot sends `misc/hbm.png` to the current channel.
+A simple prefix command. When a user types `/hbm`, the bot sends `misc/hbm.png` to the current channel.
 
 The `misc/` folder must be in the same directory as `bot.py`. If the file is missing, the bot replies with an error message.
 
@@ -299,7 +299,7 @@ The `misc/` folder must be in the same directory as `bot.py`. If the file is mis
 
 | Command | Description |
 |---|---|
-| `!hbm` | Sends `misc/hbm.png` to the current channel. |
+| `/hbm` | Sends `misc/hbm.png` to the current channel. |
 
 ---
 
@@ -311,7 +311,7 @@ config.txt              ← configuration (auto-generated on first run)
 default_msgs.txt        ← default random response messages
 mention_msgs.txt        ← mention response messages
 misc/
-└── hbm.png             ← image used by !hbm command
+└── hbm.png             ← image used by /hbm command
 ```
 
 ---
@@ -326,5 +326,5 @@ misc/
 | Auto-thread silently failing | The bot needs **Manage Threads** + **Add Reactions** in `AUTO_THREAD_CHANNEL_ID`. Check channel permission overrides. |
 | Bot responds to its own messages | Should not happen - the `on_message` guard returns early for `bot.user`. Check for other bots forwarding messages. |
 | Chicken out fires on restart | By design - the in-memory join log is cleared on restart. Pre-restart members are not tracked. |
-| !hbm returns "file not found" | Create the `misc/` folder next to `bot.py` and put `hbm.png` inside it. |
+| `/hbm` returns "file not found" | Create the `misc/` folder next to `bot.py` and put `hbm.png` inside it. |
 | Message not added after approval | The message may already be in the file. The button warns but will not duplicate. |
