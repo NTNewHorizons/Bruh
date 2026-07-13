@@ -1,0 +1,7 @@
+**How to Download the Beta Version of the Modpack**
+
+1. Open up this page - https://github.com/NTNewHorizons/NTNH/tree/updates/upcoming
+2. Click the green "Code" button on the top
+3. Click "Download ZIP"
+
+It will download the Native archive of the upcoming NTNH update

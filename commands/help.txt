@@ -1,0 +1,10 @@
+**List of Commands**
+
+`!beta` - how to download and install the beta version of the modpack
+`!bug` - what to do if you found a bug
+`!crash` - what to do if your game crashed
+`!help` or `!list` - shows this list of commands
+`!mkb` - `mkb: minimum version required is 2.0.0` crash
+`!brigadier` - depency download error
+`!chunk_generation` - chunk generation lag
+`!server` - server package

@@ -1,0 +1,3 @@
+**Chunk Generation Lags**
+
+This issue has been reported and fixed in NTNH 2.12.0.

@@ -1,0 +1,11 @@
+**My Game Crashed!**
+
+Usually a simple world rejoin or game restart helps.
+
+If the crash persists, visit the https://discord.com/channels/1365318764895277136/1365674674457022576 channel or any other
+#help channel or [GitHub Issue Tracker](https://github.com/NTNewHorizons/NTNH/issues).
+
+You'll get a feedback in between 5 minutes or 12 hours, from a random person or <@1209428799289032704> who usually wants to help ASAP.
+-# but sometimes he's just asleep or at school
+
+Describe the crash in detail (how to reproduce it), attach latest.log and the crash report, that really matters.

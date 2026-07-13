@@ -1,0 +1,8 @@
+**mkb: minimum version required is 2.0.0**
+
+This crash is only present in the NTNH 2.9.0 CurseForge pack.
+
+To fix it, simply remove the KeyboardWizard mod from the mods folder.
+
+Read more about it:
+https://github.com/NTNewHorizons/NTNH/issues/70

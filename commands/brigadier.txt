@@ -1,0 +1,7 @@
+**Depency Download Error**
+
+This issue was fixed in NTNH 2.12.0
+
+See: https://github.com/NTNewHorizons/NTNH/issues/92
+
+The fix is to download [this](https://github.com/user-attachments/files/29760673/falsepattern.tar.gz) ZIP archive and unpack it into your .minecraft folder
