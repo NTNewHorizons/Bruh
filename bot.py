@@ -116,6 +116,17 @@ CHICKEN_OUT_TIMEOUT=900
 # Message/URL sent when someone chickens out
 CHICKENED_OUT_MSG=https://tenor.com/view/walk-away-gif-8390063
 
+
+
+# --- Greeting New Members ---
+# Enable or disable greeting new members when they join the server
+ENABLE_GREETING=false
+
+# Channel where welcome messages are sent (leave blank to use system channel)
+GREETING_CHANNEL_ID=
+
+
+
 # How long (seconds) the bot stays "active" in a channel after being pinged,
 # responding without needing a new @mention. Set to 0 to disable.
 ATTENTION_WINDOW_SECONDS=300
@@ -344,6 +355,7 @@ def load_config() -> dict:
         "VOICE_SPONTANEOUS_CHECK_INTERVAL", "VOICE_SPONTANEOUS_JOIN_CHANCE",
         "VOICE_SPONTANEOUS_MIN_STAY", "VOICE_SPONTANEOUS_MAX_STAY",
         "HEARTBEAT_INTERVAL_SECONDS",
+        "GREETING_CHANNEL_ID",
     }
     boolean_keys = {
         "ENABLE_RANDOM_MESSAGES", "ENABLE_MENTION_RESPONSES", "ENABLE_AUTO_THREAD",
@@ -352,6 +364,7 @@ def load_config() -> dict:
         "LLM_PERCENTAGE", "ENABLE_LOGGING", "ENABLE_SHITPOST", "ENABLE_BIRTHDAYS",
         "ENABLE_ATTENTION_WINDOW", "ENABLE_LLM_VISION",
         "ENABLE_VOICE", "ENABLE_VOICE_SOUNDS", "ENABLE_VOICE_SPONTANEOUS", "ENABLE_REPLY_TO_MESSAGE",
+        "ENABLE_GREETING",
     }
 
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -394,6 +407,8 @@ def load_config() -> dict:
     config.setdefault("GUILD_ID", 0)
     config.setdefault("CHICKEN_OUT_TIMEOUT", 900)
     config.setdefault("CHICKENED_OUT_MSG", "https://tenor.com/view/walk-away-gif-8390063")
+    config.setdefault("ENABLE_GREETING", False)
+    config.setdefault("GREETING_CHANNEL_ID", 0)
     config.setdefault("AUTHORIZED_USER_ID", 0)
     config.setdefault("ATTENTION_WINDOW_SECONDS", 300)
     config.setdefault("LLM_DEBOUNCE_SECONDS", 2)
@@ -2484,6 +2499,14 @@ async def on_ready():
     else:
         print(f"   Birthdays         : ❌ disabled")
 
+    # ── Greeting ──────────────────────────────────────────────────────────────
+    if cfg["ENABLE_GREETING"]:
+        gchan = cfg.get("GREETING_CHANNEL_ID", 0)
+        gchan_str = f"channel={gchan}" if gchan else "system channel"
+        print(f"   Greeting          : ✅ {gchan_str}")
+    else:
+        print(f"   Greeting          : ❌ disabled")
+
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -2785,12 +2808,92 @@ async def handle_llm_mention(
                     pass
 
 
+GREETING_PROMPT_EXTRA = (
+    "WELCOME MISSION: A new member has joined the server. "
+    "This is NOT a normal conversation — you are to WELCOME them. "
+    "You MUST be sincerely kind, warm, and genuinely happy they're here. "
+    "Greet the new member with real enthusiasm and make them feel welcome. "
+    "Show your hidden kind heart! Be energetic, positive, and welcoming. "
+    "This is a special moment — celebrate their arrival!\n\n"
+    "IMPORTANT: Keep your welcome short (1-3 sentences). "
+    "Be yourself (Bruh-style) but turn the kindness dial ALL the way up. "
+    "Raw welcome message only — no emojis."
+)
+
+
+async def greet_new_member(member: discord.Member) -> None:
+    greeting_channel_id = cfg.get("GREETING_CHANNEL_ID", 0)
+    channel = bot.get_channel(greeting_channel_id) if greeting_channel_id else member.guild.system_channel
+
+    if not channel:
+        log("warning", f"[GREETING] No valid channel for greeting {member} in {member.guild}")
+        print(f"❌ [GREETING] No greeting channel configured for {member.guild.name}")
+        return
+
+    try:
+        if cfg.get("ENABLE_LLM"):
+            user_identity = f"SYSTEM"
+            prompt = (
+                f"A new member named {member.display_name} ({member.mention}) just joined the server. "
+                f"Please write a warm, sincere welcome message!"
+            )
+            history = []
+
+            if cfg["LLM_TYPING_INDICATOR"]:
+                async with channel.typing():
+                    response = await query_llm(
+                        prompt, user_identity, history,
+                        extra_system_prompt=GREETING_PROMPT_EXTRA,
+                        channel_name=getattr(channel, "name", ""),
+                    )
+            else:
+                response = await query_llm(
+                    prompt, user_identity, history,
+                    extra_system_prompt=GREETING_PROMPT_EXTRA,
+                    channel_name=getattr(channel, "name", ""),
+                )
+
+            if response:
+                if len(response) > 1990:
+                    response = response[:1990] + "..."
+                await channel.send(f"{member.mention} {response}")
+                log("info", f"[GREETING] Welcomed {member} ({member.id}) via LLM")
+                print(f"👋 [GREETING] LLM welcomed {member}")
+            else:
+                raise ValueError("Empty response from LLM")
+        else:
+            fallback = f"Welcome {member.mention} to the server! Hope you enjoy your stay!"
+            await channel.send(fallback)
+            log("info", f"[GREETING] Welcomed {member} ({member.id}) with fallback")
+            print(f"👋 [GREETING] Fallback welcomed {member}")
+
+    except discord.Forbidden:
+        log("warning", f"[GREETING] No permission to send in {getattr(channel, 'name', channel.id)}")
+        print(f"❌ [GREETING] No permission in channel {getattr(channel, 'name', channel.id)}")
+    except discord.HTTPException as e:
+        log("error", f"[GREETING] HTTP error for {member}: {e}")
+        print(f"❌ [GREETING] HTTP error: {e}")
+    except Exception as e:
+        log("error", f"[GREETING] Error greeting {member}: {e}")
+        print(f"❌ [GREETING] Error: {e}")
+        if cfg.get("LLM_FALLBACK_ON_ERROR"):
+            try:
+                fallback = f"Welcome {member.mention} to the server! Hope you enjoy your stay!"
+                await channel.send(fallback)
+                log("info", f"[GREETING] Fallback after error for {member}")
+            except Exception:
+                pass
+
+
 @bot.event
 async def on_member_join(member: discord.Member):
     if cfg["ENABLE_CHICKEN_OUT"]:
         recent_joins[member.id] = discord.utils.utcnow()
     log("info", f"[JOIN] {member} ({member.id}) joined {member.guild}")
     print(f"👋 {member} joined.")
+
+    if cfg.get("ENABLE_GREETING"):
+        await greet_new_member(member)
 
 
 @bot.event
