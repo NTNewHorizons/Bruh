@@ -2810,6 +2810,7 @@ async def handle_llm_mention(
 
 GREETING_PROMPT_EXTRA = (
     "WELCOME MISSION: A new member has joined the server. "
+    "You MUST do this in ORIGINAL way, not what you'll usualy say. "
     "This is NOT a normal conversation — you are to WELCOME them. "
     "You MUST be sincerely kind, warm, and genuinely happy they're here. "
     "Greet the new member with real enthusiasm and make them feel welcome. "
